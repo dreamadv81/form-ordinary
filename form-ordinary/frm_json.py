@@ -1234,6 +1234,14 @@ def cmd_pack(args):
     return code
 
 
+def cmd_epf_copyinfo(args):
+    from frm_codec.epf import command as epf_command
+    lines, code, _ = epf_command.run(args.path, args.out, args.dry_run)
+    for line in lines:
+        print(line, file=sys.stderr if code else sys.stdout)
+    return code
+
+
 def cmd_propose(args):
     if not (SKILL / "lab" / "propose.py").exists():
         # Без этой проверки в установленной копии возникла бы трассировка ModuleNotFoundError, а не сообщение.
@@ -1575,13 +1583,20 @@ def main(argv=None):
     p.add_argument("path", help="form.frm, Form.bin, каталог Ext, каталог формы; с --all — каталог с формами")
     p.add_argument("--all", action="store_true", help="собрать все Form.bin под каталогом, где содержимое разошлось")
     p.add_argument("--force", action="store_true", help="собрать и в каталоге с внешней сборкой")
+    p = sub.add_parser(
+        "epf-copyinfo", help=".epf/.erf → дописать в copyinfo ссылки обычных форм (обработка, собранная ibcmd)",
+        description="Дописывает в элемент copyinfo внешней обработки или отчёта ссылки, которые нужны её обычным формам; уже записанное "
+                    "не трогает. Файл (или -o) пишется, только если copyinfo изменился. Отказ — словами, код 1.")
+    p.add_argument("path", help=".epf или .erf")
+    p.add_argument("-o", "--out", help="куда писать результат (умолчание — тот же файл); без изменений ничего не пишется")
+    p.add_argument("--dry-run", action="store_true", help="только сообщить, что будет дописано")
     p = sub.add_parser("propose", help="предложения к карте из журнала изменений (только в репозитории навыка)")
     p.add_argument("--ledger"); p.add_argument("-o", "--out")
     p.add_argument("--matrix-dir", help="каталог матриц свойств (умолчание — каталог матриц репозитория навыка)")
     args = ap.parse_args(argv)
     handler = {"decode": cmd_decode, "encode": cmd_encode, "validate": cmd_validate,
                "edit": cmd_edit, "generate": cmd_generate, "new": cmd_new, "add-field": cmd_add_field, "fragment": cmd_fragment, "describe": cmd_describe, "brief": cmd_brief, "design": cmd_design, "lint": cmd_lint, "layout": cmd_layout, "render": cmd_render, "anchors-check": cmd_anchors_check, "repair-anchors": cmd_repair_anchors,
-               "diff": cmd_diff, "stat": cmd_stat, "unpack": cmd_unpack, "pack": cmd_pack,
+               "diff": cmd_diff, "stat": cmd_stat, "unpack": cmd_unpack, "pack": cmd_pack, "epf-copyinfo": cmd_epf_copyinfo,
                "schema": cmd_schema, "propose": cmd_propose, "patterns": cmd_patterns}[args.cmd]
     _search_config_pictures(args)
     try:
