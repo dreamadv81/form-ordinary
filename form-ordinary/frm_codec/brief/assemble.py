@@ -31,12 +31,15 @@ def detail_parts(detail):
     return list(DETAIL_PARTS) if "all" in names else names
 
 
-def build(doc, form_path, config_dir=None, out_dir=None, module_text=None, origin=None, code_notes=None, state=None, hidden="hatch", conditional="plain", detail=None):
+def build(doc, form_path, config_dir=None, out_dir=None, module_text=None, origin=None, code_notes=None, state=None, hidden="hatch", conditional="plain", detail=None, root_xml=None):
     """Досье формы `doc`; `origin` — форма выгрузки, копия которой строится (`--origin`): она не сосед для стиля конфигурации; подписи читаются на основном языке выгрузки (`lstring`), без выгрузки — по правилу без него. Остальное — `_build`.
 
     `detail` — части подробностей (`--detail`: `structure`, `columns`, `facts`, `norms`, `style`, `editing`, `code`, `all`): их текст идёт в `brief-full.md`, а `brief.md` остаётся обзором.
     `code_notes` — записи разбора кода, который сделала модель (`brief.codenotes`: список записей из `code-notes.json`); без них досье строится как при `--no-code`:
-    модуль формы читается только точным поиском (процедуры, обработчики, имена элементов), а что код меняет на экране, неизвестно."""
+    модуль формы читается только точным поиском (процедуры, обработчики, имена элементов), а что код меняет на экране, неизвестно.
+
+    `root_xml` — корневой XML выгрузки внешней обработки или отчёта (`--root-xml`): реквизиты и табличные части объекта формы берутся из него, выгрузка
+    конфигурации (`config_dir`) рядом необязательна."""
     if hidden not in ("hide", "hatch"):
         raise ValueError(f"режим скрытого — hide или hatch, а не «{hidden}»")
     if conditional not in ("plain", "hatch"):
@@ -48,10 +51,10 @@ def build(doc, form_path, config_dir=None, out_dir=None, module_text=None, origi
         formstate.apply(doc, state)         # неизвестное имя в состоянии — отказ словами до сборки, а не «картинки не построены»
     code = metadata._main_language(pathlib.Path(config_dir)) if config_dir is not None else None
     with lstring.main_language(code), bar_platform.context():       # вид формы и проведение документа `_build` называет, когда они известны
-        return _build(doc, form_path, config_dir, out_dir, module_text, origin, code_notes, state, hidden, conditional, parts)
+        return _build(doc, form_path, config_dir, out_dir, module_text, origin, code_notes, state, hidden, conditional, parts, root_xml)
 
 
-def code_task(doc, form_path, config_dir=None, out_dir=None, module_text=None, command=""):
+def code_task(doc, form_path, config_dir=None, out_dir=None, module_text=None, command="", root_xml=None):
     """Задание на разбор кода формы моделью: `code-task.md`, заготовка `code-notes.json` и `module.bsl` в каталоге досье (`brief.codetask`); досье не строится.
 
     Возвращает `{task, notes, module, procedures}`. Раскладка, которая форму не читает, — `edit.EditError` словами."""
@@ -62,7 +65,7 @@ def code_task(doc, form_path, config_dir=None, out_dir=None, module_text=None, c
         form = layout.read(doc)
         rec = census.record(doc, str(form_path.resolve()))
         structure = structure_mod.recognize(doc, rec["kind"], modeled=True)
-        meta = metadata.load(config_dir) if config_dir is not None else None
+        meta = metadata.load_for(config_dir, root_xml)
         _hint_kind, hint_object = describe.hints_from_path(form_path.resolve())
         binder = _Binder(doc, meta, hint_object)
         names = br_facts._Names(form, structure)
@@ -198,7 +201,7 @@ def default_rows(targets):
     return sorted(found.values(), key=lambda r: ranges.get(r["procedure"].casefold(), (0, 0))[0])
 
 
-def _build(doc, form_path, config_dir=None, out_dir=None, module_text=None, origin=None, code_notes=None, state=None, hidden="hatch", conditional="plain", parts=None):
+def _build(doc, form_path, config_dir=None, out_dir=None, module_text=None, origin=None, code_notes=None, state=None, hidden="hatch", conditional="plain", parts=None, root_xml=None):
     """Досье формы `doc` (документ уровня 1): словарь `brief.json`; `brief.md`, `brief.json` и картинки пишутся в `out_dir`.
 
     `form_path` — путь формы (вид и конфигурация определяются по нему); `config_dir` — каталог выгрузки конфигурации либо `None`;
@@ -212,7 +215,7 @@ def _build(doc, form_path, config_dir=None, out_dir=None, module_text=None, orig
     kind = rec["kind"]
     table = patterns.load()
     structure = structure_mod.recognize(doc, kind, modeled=True)
-    meta = metadata.load(config_dir) if config_dir is not None else None
+    meta = metadata.load_for(config_dir, root_xml)
     _hint_kind, hint_object = describe.hints_from_path(form_path.resolve())
     binder = _Binder(doc, meta, hint_object)
     obj = binder.obj

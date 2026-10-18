@@ -222,7 +222,10 @@ class _Ctx:
     def unresolved(self, what):
         """Почему имя объекта взять неоткуда: обработка — метаданные обработок не читаются; иначе — выгрузки нет либо объект по ней не найден."""
         if self.config is None:
-            return f"{what}: имя даёт выгрузка (--config), её не дано"
+            return f"{what}: имя даёт выгрузка (--config) или, у внешней обработки, корневой XML (--root-xml), их не дано"
+        if not self.config.has_dump:
+            return (f"{what}: объект формы по корневому XML не найден (основной реквизит формы — не тип Object этого внешнего объекта) — "
+                    "имя реквизита объекта взять неоткуда")
         if self.kind == "processing":
             said = self.config.failed_reason(self.object_name) if self.object_name else None
             why = (f"файл обработки «{self.object_name}» не прочитан: {said}" if said else

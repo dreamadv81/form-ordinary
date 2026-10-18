@@ -161,6 +161,8 @@ def _apply(doc, ops, bsl, siblings, config):
     if config is not None:
         from . import datapath
         config = datapath.load_config(config)  # каталог читается один раз на весь перечень
+    from .. import guides
+    watch = guides.Watch(doc)       # панели у краёв и элементы ниже нижней направляющей: что стояло до перечня, перечень не виноват
     log = []
     for number, op in enumerate(ops, 1):
         if not isinstance(op, dict) or "op" not in op:
@@ -200,6 +202,8 @@ def _apply(doc, ops, bsl, siblings, config):
         except EditError as e:
             raise EditError(f"операция {number} ({name}): {e}") from None
         log.append(f"{number}. {said}")
+        watch.step(doc, number)
+    watch.finish(doc, log)
     return doc, bsl, log
 
 

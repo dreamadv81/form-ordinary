@@ -15,7 +15,7 @@
 `patterns.json` (большинство форм в конфигурациях, `patterns.norm`); вид из меньше трёх конфигураций (`thin`) или показатель без нормы — отказ словами. Чего в нормах нет,
 а геометрии формы нужно, — константы ниже. Числа ряда, блока справа от шапки, переключателей в ряд и разделителя — перепись корпуса (`data/row_norms.json`, `rownorms`).
 
-**Обработка** (`kind: "processing"`). Данные формы обработки — реквизиты ФОРМЫ (`source: "form"`: привязка `bind attribute=` с переносом типа в поле,
+**Обработка и отчёт** (`kind: "processing"`; объект отчёта — «ВнешнийОтчет.Имя» либо «Отчет.Имя» — тот же вид, а нормы раскладки берутся по виду `report`). Данные формы обработки — реквизиты ФОРМЫ (`source: "form"`: привязка `bind attribute=` с переносом типа в поле,
 `bind(copy_type=True)`; новые — ключ `attributes` описания, операция `add_attribute`) и реквизиты самой обработки по выгрузке
 (`DataProcessors/<Имя>.xml`): поле на реквизит объекта — тот же `bind data="Объект.Реквизит"`, что у справочника, но **только когда основной реквизит
 исходной формы — объект ЭТОЙ обработки в выгрузке**. Нет выгрузки, нет основного реквизита или его тип не объект выгрузки — данные только реквизиты формы, и
@@ -75,7 +75,9 @@ KINDS = {"catalog.item": "catalog", "document.item": "document", "processing": "
 KIND_WORDS = {"catalog": "справочник", "document": "документ", "processing": "обработка"}  # вид объекта выгрузки словами
 LIST_KINDS = ("catalog.list", "document.list")
 PROCESSING = "processing"
-OBJECT_PREFIX = re.compile(r"^(Обработка|DataProcessor)\.\S+$")   # полное имя обработки в описании
+OBJECT_PREFIX = re.compile(r"^(Обработка|DataProcessor|ВнешняяОбработка|ExternalDataProcessor)\.\S+$")   # полное имя обработки в описании (внешней — «ВнешняяОбработка.Имя»)
+REPORT_PREFIX = re.compile(r"^(Отч[её]т|Report|ВнешнийОтч[её]т|ExternalReport)\.\S+$")      # полное имя отчёта в описании (внешнего — «ВнешнийОтчет.Имя»); вид описания тот же — processing
+REPORT_NORMS = "report"      # вид норм `patterns.json` формы отчёта: у описания с объектом-отчётом нормы берутся по нему, а не по «processing»
 SKIPPED_KEYS = ("type", "name", "why", "in")  # запись `skipped` описания из формы (`describe`): движок её не читает
 BLOCKS = ("command_bar", "fields", "group", "tabs", "table", "spreadsheet", "radio", "picture", "row", "beside", "split")
 BAR_PLACES = ("top", "bottom")
@@ -288,6 +290,16 @@ def norms_of(table, kind, bottom=False, top=False):
     out["multiline_height"] = multiline_height(table)      # не обязательна: нужна полю с `multi_line` без `height`
     check_pitch(out, kind)
     return out
+
+
+def norms_kind(desc, obj=None):
+    """Вид норм `patterns.json` для описания: у вида processing с объектом-отчётом — `report` (форма отчёта; объект выгрузки, а без него имя в описании),
+    иначе вид описания."""
+    if desc["kind"] != PROCESSING:
+        return desc["kind"]
+    if obj is not None:
+        return REPORT_NORMS if obj.kind == "report" else PROCESSING
+    return REPORT_NORMS if REPORT_PREFIX.match(str(desc.get("object", "")).strip()) else PROCESSING
 
 
 def multiline_height(table):
@@ -2500,15 +2512,27 @@ def _processing_scope(desc, form_doc, config):
     guid = datapath._type_guid(form.rows[form.main])
     hit = config.object_by_type_id(guid) if guid else None
     if hit is None or hit[1].lower() != "object":
+        if named is not None and named.external:      # развилку ведёт объект описания, а не наличие выгрузки: с --config и --root-xml вместе слова те же
+            raise GenerateError(f"основной реквизит формы «{form.main}» — не тип Object внешнего объекта «{named.full_name}» из корневого XML: "
+                                f"форма не {'этого внешнего отчёта' if named.kind == 'report' else 'этой внешней обработки'}")
+        if not config.has_dump:
+            return None, form, (f"основной реквизит формы «{form.main}» — не тип Object внешнего объекта из корневого XML; данные формы — "
+                                "реквизиты формы")
         if named is not None:
-            raise GenerateError(f"основной реквизит формы «{form.main}» — не объект выгрузки «{config.root}» (внешняя обработка, диалог "
-                                f"задания, тип платформы), а описание называет обработку выгрузки «{named.full_name}»: форма не этой "
-                                "обработки. У внешней обработки в описании её собственное имя (в выгрузке его нет), данные формы — "
-                                "только реквизиты формы")
+            raise GenerateError(f"основной реквизит формы «{form.main}» — не объект выгрузки «{config.root}» (внешняя обработка или отчёт, "
+                                f"диалог задания, тип платформы), а описание называет {'отчёт' if named.kind == 'report' else 'обработку'} выгрузки "
+                                f"«{named.full_name}»: форма не {'этого отчёта' if named.kind == 'report' else 'этой обработки'}. У внешней "
+                                "обработки или отчёта в описании собственное имя (в выгрузке его нет), данные формы — только реквизиты формы")
         said = config.failed_reason(desc["object"])
-        return None, form, (f"основной реквизит формы «{form.main}» — не объект выгрузки «{config.root}»; объекта обработки "
-                            f"«{desc['object']}» в выгрузке нет" + (f" (файл обработки не прочитан: {said})" if said else ""))
-    if hit[0] is not named:
+        return None, form, (f"основной реквизит формы «{form.main}» — не объект выгрузки «{config.root}»; объекта "
+                            f"{'отчёта' if REPORT_PREFIX.match(desc['object'].strip()) else 'обработки'} «{desc['object']}» в выгрузке нет"
+                            + (f" (файл {'отчёта' if REPORT_PREFIX.match(desc['object'].strip()) else 'обработки'} не прочитан: {said})" if said else ""))
+    if hit[0].external:
+        if not metadata.same_object_name(desc["object"], hit[0].full_name):
+            raise GenerateError(f"описание называет «{desc['object']}», а форма (тип её основного реквизита) и корневой XML — «{hit[0].full_name}»: "
+                                f"в описании это имя или «{metadata.KINDS[hit[0].kind][2]}.{hit[0].name}»")
+        named = hit[0]
+    elif hit[0] is not named:
         raise GenerateError(f"форма — объекта «{hit[0].full_name}» (по типу её основного реквизита), а описание — "
                             f"«{desc['object']}»: генерация не пишет чужие GUID реквизитов в чужую форму")
     try:
@@ -2535,8 +2559,9 @@ def check_description(desc):
         problems.append(f"kind — {', '.join((*KINDS, *LIST_KINDS))}, а пришло {kind!r}")
     if not isinstance(desc.get("object"), str) or not desc.get("object", "").strip():
         problems.append("object — полное имя объекта выгрузки («Справочник.Номенклатура»; у обработки «Обработка.Имя»)")
-    elif kind == PROCESSING and not OBJECT_PREFIX.match(desc["object"].strip()):
-        problems.append(f"object — полное имя обработки «Обработка.Имя», а пришло {desc['object']!r}")
+    elif kind == PROCESSING and not (OBJECT_PREFIX.match(desc["object"].strip()) or REPORT_PREFIX.match(desc["object"].strip())):
+        problems.append(f"object — полное имя обработки «Обработка.Имя» (внешней — «ВнешняяОбработка.Имя») либо отчёта «Отчет.Имя» (внешнего — "
+                        f"«ВнешнийОтчет.Имя»), а пришло {desc['object']!r}")
     if kind == PROCESSING and desc.get("form_use") is not None:
         problems.append("form_use — у обработки форм элемента и группы нет")
     if "attributes" in desc and kind != PROCESSING and kind not in LIST_KINDS:
@@ -2630,13 +2655,14 @@ def plan_notes(desc, form_doc, config, norms, heights=None):
     if not body:
         raise GenerateError("описание не годится: в нём одни панели команд — нечего показывать, добавьте fields, group, tabs или table"
                             + (" (у обработки ещё spreadsheet)" if processing else ""))
-    n = norms_of(norms, desc["kind"], bottom=bottom is not None, top=top is not None)
+    norm_kind = norms_kind(desc, obj)
+    n = norms_of(norms, norm_kind, bottom=bottom is not None, top=top is not None)
     notes = list(resolver.notes)
     style_at = len(notes)
     notes.append(None)                      # место заметки о стиле исходной формы: её слова зависят от раскладки (колонка могла раздвинуться) — пишется после неё
     if processing:
-        notes.append((f"данные формы: объект обработки «{obj.full_name}» (выгрузка) и реквизиты формы" if obj is not None else
-                      f"данные формы: только реквизиты формы — объекта обработки нет ({no_object})")
+        notes.append((f"данные формы: объект {'отчёта' if obj.kind == 'report' else 'обработки'} «{obj.full_name}» ({'корневой XML' if obj.external else 'выгрузка'}) и реквизиты формы"
+                      if obj is not None else f"данные формы: только реквизиты формы — объекта {'отчёта' if REPORT_PREFIX.match(desc['object'].strip()) else 'обработки'} нет ({no_object})")
                      + (f"; новые реквизиты формы: {', '.join(form.declared)}" if form.declared else ""))
     ml_auto = [f for f in _field_specs(blocks) if f.multi_line and not f.height]
     if ml_auto and n.get("multiline_height") is None:
@@ -2644,10 +2670,10 @@ def plan_notes(desc, form_doc, config, norms, heights=None):
                             f"multiline_field_height; назовите height у: {', '.join(f.name for f in ml_auto)}")
     if heights:
         n = {**n, **heights["values"]}
-        check_pitch(n, desc["kind"])
+        check_pitch(n, norm_kind)
         notes.append(heights["note"])
     else:
-        notes.append(f"высота поля {n['field_height']} и надписи {n['label_height']} — норма вида «{desc['kind']}» "
+        notes.append(f"высота поля {n['field_height']} и надписи {n['label_height']} — норма вида «{norm_kind}» "
                      "(большинство форм в конфигурациях); соседних форм не дано (--siblings)")
     if ml_auto:
         notes.append(f"высота многострочного поля без height — {n['multiline_height']}: самая частая высота полей не меньше {patterns.MULTILINE_MIN_LINES} строк по "
@@ -2939,10 +2965,19 @@ def _deterministic_guids(seed):
 BLANK_MODE_LINE = ("Исходная форма — заготовка навыка (frm_json.py new): раскладка полная, бережный режим не включается — беречь в заготовке нечего")
 
 
-def blank_for_description(desc, config=None, config_dir=None):
+def blank_kind_of(desc):
+    """Вид заготовки под описание: у вида processing с объектом-отчётом (`ВнешнийОтчет.Имя`, `Отчет.Имя`) — `report`, иначе вид описания."""
+    if desc["kind"] == PROCESSING and REPORT_PREFIX.match(str(desc.get("object", "")).strip()):
+        return "report"
+    return desc["kind"]
+
+
+def blank_for_description(desc, config=None, config_dir=None, type_id=None, root_xml=None, dialog=False):
     """Заготовка формы под описание, когда исходной формы нет (`generate` без `--form`): `blank.Blank` либо `GenerateError`.
 
-    Вид и объект берутся из описания; выгрузка — `config` (готовая) либо `config_dir`. GUID панелей выдаются от суммы описания, но в своём
+    Вид и объект берутся из описания; выгрузка — `config` (готовая) либо `config_dir`. Тип основного реквизита формы внешней обработки без
+    выгрузки — `type_id` (GUID), `root_xml` (корневой XML выгрузки обработки) либо `dialog` (форма без основного реквизита); ни одного
+    источника у вида `processing` — отказ (`blank.build`). GUID панелей выдаются от суммы описания, но в своём
     пространстве (`:blank`): с теми, что выдаст сама генерация, они не совпадут, а повторный вызов даёт ту же заготовку байт в байт."""
     check_description(desc)
     if config is None and config_dir is not None:
@@ -2952,7 +2987,11 @@ def blank_for_description(desc, config=None, config_dir=None):
             raise GenerateError(f"выгрузка конфигурации: {e}") from None
     try:
         with _deterministic_guids(desc_sha256(desc) + ":blank"):
-            return blank_mod.build(desc["kind"], object_name=desc["object"], config=config)
+            # Названный ключ типа — источник типа заготовки; выгрузка у `generate` — справочник ссылочных типов и ему не мешает: заготовке её не отдают.
+            keyed = type_id is not None or root_xml is not None or dialog
+            blank_kind = blank_kind_of(desc)
+            return blank_mod.build(blank_kind, object_name=desc["object"], config=None if keyed else config, type_id=type_id,
+                                   root_xml=root_xml, dialog=dialog, for_generate=True)
     except blank_mod.BlankError as e:
         raise GenerateError(f"исходной формы нет, заготовка не собралась: {e}") from None
 

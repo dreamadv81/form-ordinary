@@ -15,7 +15,8 @@ def _head(doc, form, rec, form_path, config_dir, meta, binder, module_text, styl
     missing = []
     common = rec["kind"] == "other:CommonForms"
     if config_dir is None:
-        missing.append({"what": "выгрузка конфигурации (`--config`)", "without": vocab.WITHOUT["config"]})
+        external = obj is not None and getattr(obj, "external", False)       # реквизиты внешнего объекта дал `--root-xml`: выгрузка нужна только стилю и ссылочным типам
+        missing.append({"what": "выгрузка конфигурации (`--config`)", "without": vocab.WITHOUT["config_external" if external else "config"]})
     elif obj is None and not common and extra is None:
         missing.append({"what": f"объект формы в выгрузке (по типу основного реквизита; читаются {vocab.READ_WORDS})",
                         "without": vocab.WITHOUT["object"]})

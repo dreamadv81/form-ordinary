@@ -81,8 +81,10 @@ KINDS = {"catalog": ("Catalogs", "Catalog", "Справочник", "Catalog"),
          "document": ("Documents", "Document", "Документ", "Document"),
          "processing": ("DataProcessors", "DataProcessor", "Обработка", "DataProcessor"),
          "report": ("Reports", "Report", "Отчет", "Report")}
+# внешний объект: вид → (русское имя в полном имени, тег корня, английское имя)
+EXTERNAL_WORDS = {"processing": ("ВнешняяОбработка", "ExternalDataProcessor", "ExternalDataProcessor"),
+                  "report": ("ВнешнийОтчет", "ExternalReport", "ExternalReport")}
 NO_FOLDER_KINDS = ("document", "processing", "report")       # групп и элементов (`Use`) у этих видов нет
-NOT_FATAL_KINDS = ("processing", "report")      # нечитаемый файл такого объекта не отказывает всю загрузку: `Config.failed`
 NOT_FATAL_KINDS = ("processing", "report")      # нечитаемый файл такого объекта не отказывает всю загрузку: `Config.failed`
 # какие `Use` видит форма: item — форма элемента, folder — форма группы
 _USE_FOR = {"item": ("ForItem", "ForFolderAndItem"), "folder": ("ForFolder", "ForFolderAndItem")}
@@ -166,9 +168,12 @@ class MdObject:
     standard_synonyms: dict = dataclasses.field(default_factory=dict)
     std_types: dict = dataclasses.field(default_factory=dict)  # стандартный реквизит → `(тип, длина, допустимая длина)` из свойств объекта
     posting: object = None     # у документа — `Posting` из свойств: `Allow` (проводится) или `Deny`; у остальных видов и без свойства — `None`
+    external: bool = False     # внешняя обработка или внешний отчёт (корневой XML выгрузки внешнего объекта, `external_root`)
 
     @property
     def full_name(self):
+        if self.external:
+            return f"{EXTERNAL_WORDS[self.kind][0]}.{self.name}"
         return f"{KINDS[self.kind][2]}.{self.name}"
 
     def attribute(self, name):
@@ -277,6 +282,7 @@ class Config:
     failed: dict = dataclasses.field(default_factory=dict)  # обработки, чей файл не прочитан: полное имя → слова
     main_language: str = None   # код основного языка конфигурации (`Configuration.xml`/`DefaultLanguage` → `Languages/<имя>.xml`), если прочитан
     extras: dict = dataclasses.field(default_factory=dict)   # журналы и регистры: полное русское имя → `ExtraObject`
+    has_dump: bool = True       # `False` — выгрузки конфигурации нет, в `objects` только внешний объект из корневого XML (`load_for`)
     _by_type: dict = dataclasses.field(default=None, repr=False)
     _enum_refs: dict = dataclasses.field(default_factory=dict, repr=False)
 
@@ -294,9 +300,13 @@ class Config:
         key = _normalize(full_name)
         if key in self.objects:
             return self.objects[key]
+        alias = _external_alias(key)
+        if alias in self.objects:
+            return self.objects[alias]       # «Обработка.Имя» называет и внешнюю обработку: её собственное имя в описании
         if key in self.failed:
             raise MetadataError(f"в выгрузке «{self.root}» объект «{key}» не прочитан: {self.failed[key]}")
-        raise MetadataError(f"в выгрузке «{self.root}» нет объекта «{full_name}»; объекты: "
+        where = f"в выгрузке «{self.root}»" if self.has_dump else "среди объектов корневого XML"
+        raise MetadataError(f"{where} нет объекта «{full_name}»; объекты: "
                             f"{', '.join(sorted(self.objects))}"
                             + (f"; не прочитаны: {', '.join(sorted(self.failed))}" if self.failed else ""))
 
@@ -327,6 +337,9 @@ class Config:
         kind, dot, name = (type_name[4:] if type_name.startswith("cfg:") else type_name).partition(".")
         if not dot or not name:
             raise MetadataError(f"тип «{type_name}» — не ссылка на объект (ждётся cfg:CatalogRef.Имя)")
+        if not self.has_dump:
+            raise MetadataError(f"тип «{type_name}» — ссылка на объект конфигурации, а выгрузки конфигурации не дано (--config КАТАЛОГ): "
+                                "GUID типа-ссылки взять неоткуда")
         name = _nfc(name)
         if kind in ("CatalogRef", "DocumentRef"):
             key = f"{'Справочник' if kind == 'CatalogRef' else 'Документ'}.{name}"
@@ -357,12 +370,33 @@ class Config:
 
 
 def _normalize(full_name):
-    full_name = _nfc(full_name).replace("Отчёт.", "Отчет.", 1) if _nfc(full_name).startswith("Отчёт.") else _nfc(full_name)
+    full_name = _nfc(full_name)
+    for ru, tag, en in EXTERNAL_WORDS.values():
+        for pre in (ru, en, ru.replace("Отчет", "Отчёт")):
+            if full_name.startswith(pre + "."):
+                return f"{ru}.{full_name[len(pre) + 1:]}"
+    full_name = full_name.replace("Отчёт.", "Отчет.", 1) if full_name.startswith("Отчёт.") else full_name
     for _, (_, _, ru, en) in KINDS.items():
         for pre in (ru, en):
             if full_name.startswith(pre + "."):
                 return f"{ru}.{full_name[len(pre) + 1:]}"
     return full_name
+
+
+def _external_alias(key):
+    """Полное имя внешнего объекта, которое называет «Обработка.Имя» либо «Отчет.Имя»; другому ключу — `None`."""
+    for kind, (ext_ru, _tag, _en) in EXTERNAL_WORDS.items():
+        pre = KINDS[kind][2] + "."
+        if key.startswith(pre):
+            return f"{ext_ru}.{key[len(pre):]}"
+    return None
+
+
+def same_object_name(a, b):
+    """Называют ли два полных имени один объект: с точностью до написания вида («Отчёт.» и «Отчет.») и до того, что «Обработка.Имя» называет и
+    внешнюю обработку «ВнешняяОбработка.Имя» (так же «Отчет.» и «ВнешнийОтчет.»)."""
+    x, y = _normalize(a), _normalize(b)
+    return x == y or _external_alias(x) == y or _external_alias(y) == x
 
 
 def _q(tag):
@@ -481,24 +515,38 @@ def _standard_synonyms(p, std):
 
 def _object(path, kind):
     where = f"{path.parent.name}/{path.name}"
+    root = _meta_root(path, where)
+    el = root.find(f"m:{KINDS[kind][1]}", NS)
+    if el is None:
+        raise MetadataError(f"{where}: в файле нет элемента {KINDS[kind][1]}")
+    return _build_object(el, kind, where, stem=path.stem)
+
+
+def _meta_root(path, where, wrong="корень не MetaDataObject", bad_xml="не разобрать XML"):
+    """Корень файла выгрузки (`MetaDataObject`) известной версии формата; иначе `MetadataError`."""
     try:
         root = ET.parse(path).getroot()
+    except OSError as e:
+        raise MetadataError(f"{where}: файл не прочитан ({e.strerror or e})") from None
     except ET.ParseError as e:
-        raise MetadataError(f"{where}: не разобрать XML ({e})") from None
+        raise MetadataError(f"{where}: {bad_xml} ({e})") from None
     if root.tag != _q("MetaDataObject"):
-        raise MetadataError(f"{where}: корень не MetaDataObject")
+        raise MetadataError(f"{where}: {wrong}")
     ver = root.get("version")
     if ver not in FORMAT_VERSIONS:
         raise MetadataError(f"{where}: формат выгрузки {ver!r} неизвестен (читаются {', '.join(FORMAT_VERSIONS)}); "
                             "догадываться о его раскладке нельзя")
-    el = root.find(f"m:{KINDS[kind][1]}", NS)
-    if el is None:
-        raise MetadataError(f"{where}: в файле нет элемента {KINDS[kind][1]}")
+    return root
+
+
+def _build_object(el, kind, where, stem=None, external=False):
+    """`MdObject` по элементу объекта (`Catalog`, `DataProcessor`, `ExternalDataProcessor`, …). `stem` — имя файла: имя объекта обязано с ним
+    совпадать (у корневого XML внешнего объекта файл переименовать можно, и `stem` не дают)."""
     p = el.find("m:Properties", NS)
     if p is None:
         raise MetadataError(f"{where}: нет Properties")
     name = _nfc(_text(p, "m:Name", where))
-    if name != _nfc(path.stem):
+    if stem is not None and name != _nfc(stem):
         raise MetadataError(f"{where}: имя объекта «{name}» не совпадает с именем файла")
     if not el.get("uuid"):
         raise MetadataError(f"{where}: нет uuid объекта")
@@ -530,7 +578,7 @@ def _object(path, kind):
         std.append("Дата")
     return MdObject(kind, name, el.get("uuid"), attrs, tuple(std), tables, owners, hier, _synonym(p), htype,
                     _type_ids(el, where), _standard_synonyms(p, std), std_types,
-                    _text(p, "m:Posting", where, False) if kind == "document" else None)
+                    _text(p, "m:Posting", where, False) if kind == "document" else None, external)
 
 
 def _extra_object(path, kind):
@@ -620,3 +668,67 @@ def load(config_dir):
                 continue
             extras[o.full_name] = o
     return Config(str(root), objects, failed, main_language=_main_language(root), extras=extras)
+
+
+@dataclasses.dataclass(frozen=True, eq=False)
+class ExternalRoot:
+    """Корневой XML выгрузки внешней обработки или внешнего отчёта: имя, синоним (русский), `TypeId` типа `Object` и разобранный объект
+    (`obj`: реквизиты, табличные части, типы; `MdObject.external`)."""
+    name: str
+    synonym: str
+    object_type_id: str
+    kind: str          # `processing` (ExternalDataProcessor) или `report` (ExternalReport)
+    obj: object        # MdObject
+
+
+def external_root(path):
+    """Читает корневой XML выгрузки внешней обработки или внешнего отчёта (`<Имя>.xml` рядом с каталогом `<Имя>/`): `ExternalRoot`.
+
+    Разбор реквизитов и табличных частей — тот же, что у обработки и отчёта конфигурации (`_build_object`). Отказ словами (`MetadataError`): файл
+    не читается или не XML; формат выгрузки неизвестен; корень не `ExternalDataProcessor` и не `ExternalReport` (объект конфигурации, чужой
+    корень); нет `InternalInfo/xr:GeneratedType category="Object"` или у него нет `TypeId` либо тот не GUID; реквизит или табличная часть
+    не разобраны."""
+    where = f"корневой XML {path}"
+    root = _meta_root(path, where, "не корневой XML выгрузки (ожидается MetaDataObject с одним объектом)", "не XML")
+    if len(root) != 1:
+        raise MetadataError(f"{where}: не корневой XML выгрузки (ожидается MetaDataObject с одним объектом)")
+    el = root[0]
+    tag = el.tag.split("}")[-1]
+    kind = next((k for k, (_ru, t, _en) in EXTERNAL_WORDS.items() if t == tag), None)
+    if kind is None:
+        raise MetadataError(f"{where}: объект {tag}, а нужна внешняя обработка (ExternalDataProcessor) или внешний отчёт (ExternalReport)"
+                            + ("; объект конфигурации читается через --config" if tag in {t for _d, t, _r, _e in KINDS.values()} else ""))
+    props = el.find("m:Properties", NS)
+    name = _text(props, "m:Name", where, False) if props is not None else None
+    if not name:
+        raise MetadataError(f"{where}: у внешнего объекта нет Properties/Name")
+    generated = [g for g in el.findall("m:InternalInfo/xr:GeneratedType", NS) if g.get("category") == "Object"]
+    if len(generated) != 1:
+        raise MetadataError(f"{where}: у {tag} {name} {'нет' if not generated else 'несколько'} InternalInfo/xr:GeneratedType "
+                            'category="Object" — тип основного реквизита взять неоткуда')
+    guid = _text(generated[0], "xr:TypeId", where, False) or ""
+    if not re.fullmatch(r"[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", guid):
+        raise MetadataError(f"{where}: TypeId типа Object объекта {name} — {guid!r}, а не GUID")
+    obj = _build_object(el, kind, where, external=True)
+    return ExternalRoot(obj.name, obj.synonym, guid.lower(), kind, obj)
+
+
+def load_for(config_dir=None, root_xml=None):
+    """`Config` для команды с ключами `--config` и `--root-xml`: выгрузка конфигурации, внешний объект из корневого XML либо оба вместе; ничего не
+    дано — `None`.
+
+    Внешний объект входит в `Config` как обработка или отчёт (`MdObject.external`, полное имя «ВнешняяОбработка.Имя» либо «ВнешнийОтчет.Имя»;
+    «Обработка.Имя» и «Отчет.Имя» его тоже называют, пока в выгрузке нет одноимённого объекта конфигурации). Объект с таким именем и в
+    выгрузке, и в корневом XML — отказ «объект один»: два источника реквизитов одного объекта разошлись бы молча. Ссылочные типы реквизитов
+    внешнего объекта (`cfg:CatalogRef.X`) берутся из выгрузки; без неё поле на такой реквизит отказывает словами."""
+    base = load(config_dir) if config_dir is not None else None
+    if root_xml is None:
+        return base
+    ext = external_root(root_xml).obj
+    if base is None:
+        return Config(str(pathlib.Path(root_xml).resolve().parent), {ext.full_name: ext}, has_dump=False)
+    twin = f"{KINDS[ext.kind][2]}.{ext.name}"
+    if twin in base.objects or twin in base.failed:
+        raise MetadataError(f"объект «{ext.name}» назван и в выгрузке конфигурации ({twin}), и в корневом XML внешнего объекта {root_xml}: "
+                            "объект один — реквизиты берутся из одного источника (уберите --root-xml или --config)")
+    return Config(base.root, {**base.objects, ext.full_name: ext}, base.failed, main_language=base.main_language, extras=base.extras)

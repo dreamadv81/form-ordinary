@@ -9,7 +9,7 @@ from .assemble import _object_module, make_targets
 from .purpose import _Binder, parse_module
 
 
-def module_marks(doc, form_path, module_text, code_notes, config_dir=None):
+def module_marks(doc, form_path, module_text, code_notes, config_dir=None, root_xml=None):
     """Пометки кода для `render.render(…, marks=…)`: `render.CodeMarks`, как на картинках досье (`brief.images.marks_of`); отклонённые записи — в `marks.rejected`
     (`[{index, kind, why}]`), рисунок называет их в `notes`, команда — в stderr.
 
@@ -27,7 +27,7 @@ def module_marks(doc, form_path, module_text, code_notes, config_dir=None):
             names = facts._Names(form, structure)
             config = config_dir if config_dir is not None else paths.config_of(form_path)     # выгрузка нужна для `source` записей; форма в выгрузке находит её сама
             try:
-                meta = metadata.load(config) if config is not None else None          # имена реквизитов объекта для привязок даёт выгрузка
+                meta = metadata.load_for(config, root_xml)          # имена реквизитов объекта для привязок даёт выгрузка
             except metadata.MetadataError:
                 meta = None
             _hint_kind, hint_object = describe.hints_from_path(pathlib.Path(form_path).resolve())

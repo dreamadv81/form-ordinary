@@ -259,7 +259,8 @@ def diff(desc, old, shell, obj, form_size, problems, bound=None):
     """Разница описаний `old` (образец) → `desc` (новое). Невыразимое — в `problems` словами."""
     ch = Change([], [], [], None, [])
     for key in ("kind", "object"):
-        if desc.get(key) is not None and old.get(key) is not None and desc[key] != old[key]:
+        if desc.get(key) is not None and old.get(key) is not None and desc[key] != old[key] and not (
+                key == "object" and metadata.same_object_name(desc[key], old[key])):
             problems.append(f"{key} описания «{desc[key]}», а у образца исходной формы «{old[key]}»: другая форма — бережная правка её не делает")
     if desc.get("form_use") is not None and desc["form_use"] != old.get("form_use"):
         problems.append(f"form_use описания «{desc['form_use']}», а у образца «{old.get('form_use')}»: другая роль формы")

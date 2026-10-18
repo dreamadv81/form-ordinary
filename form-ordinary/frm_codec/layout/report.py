@@ -30,6 +30,7 @@ def summary(form, detail=False):
     if coupled:
         lines.append("  " + coupled)
     lines.extend(line.strip() for line in guides.far_words(form.doc))
+    lines.extend(line.strip() for line in guides.below_words(form.doc))
     lines.extend(line.strip() for line in guides.panel_words(form.doc))
     if "device_width" not in form.doc["form"] and form.tabs_area is not None:
         lines.append("блок формы короткого поколения (без dpi и device_*): область страниц проверена у поколения 16, "

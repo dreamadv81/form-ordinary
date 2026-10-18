@@ -1,11 +1,12 @@
 """Форма с нуля: пустая заготовка формы, как её создаёт конструктор платформы (команда `new`, `generate` без `--form`).
 
-Заготовка — форма конструктора платформы 8.3.27 без содержимого: остаются панели формы и основной реквизит. Пять видов:
+Заготовка — форма конструктора платформы 8.3.27 без содержимого: остаются панели формы и основной реквизит. Шесть видов:
 
 | вид | что остаётся |
 |---|---|
-| `processing` | панель `ДействияФормы`, панель `ОсновныеДействияФормы` с кнопкой «Закрыть», основной реквизит `ОбработкаОбъект` |
-| `processing` без выгрузки | то же, без основного реквизита и без реквизитов формы (внешняя обработка, диалог) |
+| `processing` | панель `ДействияФормы`, панель `ОсновныеДействияФормы` с кнопкой «Закрыть», основной реквизит `ОбработкаОбъект`; его тип называют `--root-xml`, `--type-id` или `--object` с `--config` — без них отказ |
+| `processing --dialog` | то же, без основного реквизита и без реквизитов формы (форма-диалог; модуль формы не видит реквизитов и методов модуля обработки) |
+| `report` | то же, что у `processing`, но по форме внешнего отчёта конструктора: нижняя панель с «Закрыть» («Сформировать» с процедурой формы и разделитель убраны), основной реквизит `ОтчетОбъект`, тип значения формы отчёта; тип основного реквизита называют `--root-xml` (внешний отчёт), `--type-id` или `--object Отчет.Имя` с `--config` — без них отказ; `--dialog` — отказ |
 | `catalog.item`, `document.item` | обе панели формы с кнопками «ОК», «Записать», «Закрыть», основной реквизит `СправочникОбъект` / `ДокументОбъект` |
 | `catalog.list`, `document.list` | табличное поле со стандартными колонками, панель `ДействияФормы`, основной реквизит-список |
 
@@ -26,7 +27,8 @@ from .edit import base as ed_base
 from .edit.names import ACTIONS_GUID, BTN_OWNER
 from .tree import render
 
-KINDS = ("processing", "catalog.item", "document.item", "catalog.list", "document.list")
+KINDS = ("processing", "report", "catalog.item", "document.item", "catalog.list", "document.list")
+EXTERNAL_KINDS = ("processing", "report")      # формы без объекта-ссылки: основной реквизит — Object обработки либо отчёта
 LIST_KINDS = ("catalog.list", "document.list")
 DEFAULT_SIZE = (400, 300)
 MIN_WIDTH = 100
@@ -35,13 +37,13 @@ TOP_BAR, BOTTOM_BAR = "ДействияФормы", "ОсновныеДейст�
 LIST_PAD_X, LIST_TOP, LIST_PAD_BOTTOM = 8, 33, 8      # таблица списка конструктора: от (8, 33) до (ширина − 8, высота − 8)
 MODULE_BYTES = b"\xef\xbb\xbf"   # модуль формы, созданной конструктором, пуст: одна метка порядка байтов (как у выгрузки платформы)
 OBJECT_WORDS = {"catalog.item": "Справочник", "catalog.list": "Справочник", "document.item": "Документ", "document.list": "Документ",
-                "processing": "Обработка"}
+                "processing": "Обработка", "report": "Отчет"}
 # Заголовок, который конструктор даёт форме по синониму объекта: «Товары», «Справочник Товары», «Документы Заказ», «Обработка  Загрузка»
 # (у обработки два пробела, как записывает платформа).
 TITLE_FORMS = {"catalog.item": "{s}", "document.item": "{s}", "catalog.list": "Справочник {s}", "document.list": "Документы {s}",
-               "processing": "Обработка  {s}"}
+               "processing": "Обработка  {s}", "report": "Отчет  {s}"}
 NO_OBJECT_TITLE = "Форма"
-MAIN_TYPE = {"processing": "Object", "catalog.item": "Object", "document.item": "Object", "catalog.list": "List", "document.list": "List"}
+MAIN_TYPE = {"processing": "Object", "report": "Object", "catalog.item": "Object", "document.item": "Object", "catalog.list": "List", "document.list": "List"}
 
 
 class BlankError(ValueError):
@@ -196,22 +198,65 @@ def _object_for(kind, object_name, config):
     try:
         obj = config.object(full)
     except metadata.MetadataError as e:
-        if kind == "processing":
+        if kind in EXTERNAL_KINDS:
             return None, str(e)
         raise BlankError(f"object: {e}") from None
+    if kind == "report":      # «Отчет.», «Отчёт.», «Report.» и полные внешние имена называют отчёт одинаково: решает вид объекта, а не написание
+        if obj.kind != "report" or obj.external:
+            raise BlankError(f"object: {full!r} — {'внешний отчёт из корневого XML' if obj.external else 'не отчёт'}: форма вида «report» заводится "
+                             "на отчёт выгрузки конфигурации «Отчет.Имя» (внешний отчёт даёт --root-xml)")
+        return obj, ""
     if not full.startswith(word + "."):
         raise BlankError(f"object: {full!r} — не {word.lower()}: форма вида «{kind}» заводится на объект «{word}.Имя»")
     return obj, ""
 
 
-def build(kind, object_name=None, config=None, title=None, size=None, type_id=None):
+NO_TYPE_PROCESSING = (
+    "у формы внешней обработки основной реквизит — `ОбработкаОбъект` с типом Object этой обработки; без него модуль формы не видит "
+    "реквизитов и экспортных методов модуля обработки, и при открытии формы вызовы их не компилируются. Назовите источник типа: "
+    "`--root-xml <Имя>.xml` (корневой XML выгрузки внешней обработки; тип берётся из xr:GeneratedType category=\"Object\"), "
+    "`--type-id <GUID>` (TypeId этого GeneratedType: он лежит в `<Имя>.xml` выгрузки обработки, в блоке InternalInfo) или "
+    "`--object Обработка.Имя --config <каталог выгрузки>` (обработка из выгрузки конфигурации). Нужна форма-диалог без основного реквизита "
+    "(дополнительная форма, которой модуль обработки не нужен) — `--dialog`")
+NO_TYPE_REPORT = (
+    "у формы отчёта основной реквизит — `ОтчетОбъект` с типом Object этого отчёта; без него модуль формы не видит реквизитов и "
+    "экспортных методов модуля отчёта, и при открытии формы вызовы их не компилируются. Назовите источник типа: `--root-xml <Имя>.xml` "
+    "(корневой XML выгрузки внешнего отчёта; тип берётся из xr:GeneratedType category=\"Object\"), `--type-id <GUID>` (TypeId этого "
+    "GeneratedType: он лежит в `<Имя>.xml` выгрузки отчёта, в блоке InternalInfo) или `--object Отчет.Имя --config <каталог выгрузки>` "
+    "(отчёт из выгрузки конфигурации). Формы-диалога отчёта у вида report нет: `--dialog` не берётся")
+NO_TYPE_REPORT_GENERATE = (
+    "у формы отчёта основной реквизит — `ОтчетОбъект` с типом Object этого отчёта; без него модуль формы не видит реквизитов и "
+    "экспортных методов модуля отчёта, и при открытии формы вызовы их не компилируются. Назовите источник типа: `--root-xml <Имя>.xml` "
+    "(корневой XML выгрузки внешнего отчёта; тип берётся из xr:GeneratedType category=\"Object\"), `--type-id <GUID>` (TypeId этого "
+    "GeneratedType: он лежит в `<Имя>.xml` выгрузки отчёта, в блоке InternalInfo) или `--config`, где есть отчёт из `object` описания. "
+    "Формы-диалога отчёта нет: `--dialog` не берётся")
+DIALOG_REPORT_REFUSAL = ("--dialog у формы отчёта не берётся: формы-диалога отчёта (без основного реквизита) навык не собирает — в выгрузках конфигураций "
+                         "такая форма единична, и тип значения формы у неё нулевой, а не тип формы отчёта; заготовка по ней не собрана и "
+                         "в предприятии не проверялась. Форма отчёта несёт основной реквизит `ОтчетОбъект`")
+DIALOG_NOTE = ("форма-диалог: основного реквизита и реквизитов формы нет; модуль формы не видит реквизитов и экспортных методов модуля "
+               "обработки (вызов экспортной процедуры обработки по голому имени при открытии формы не компилируется)")
+
+
+NO_TYPE_GENERATE = (
+    "у формы внешней обработки основной реквизит — `ОбработкаОбъект` с типом Object этой обработки; без него модуль формы не видит "
+    "реквизитов и экспортных методов модуля обработки, и при открытии формы вызовы их не компилируются. Назовите источник типа: "
+    "`--root-xml <Имя>.xml` (корневой XML выгрузки внешней обработки; тип берётся из xr:GeneratedType category=\"Object\"), "
+    "`--type-id <GUID>` (TypeId этого GeneratedType: он лежит в `<Имя>.xml` выгрузки обработки, в блоке InternalInfo) или `--config`, "
+    "где есть обработка из `object` описания. Нужна форма-диалог без основного реквизита (дополнительная форма, которой модуль "
+    "обработки не нужен) — `--dialog`")
+
+
+def build(kind, object_name=None, config=None, title=None, size=None, type_id=None, root_xml=None, dialog=False, for_generate=False):
     """Заготовка формы вида `kind`; `Blank` либо `BlankError` словами.
 
     * `catalog.*`, `document.*` — нужны `object_name` («Справочник.Имя») и `config` (выгрузка, `metadata.Config`): тип основного реквизита берётся
       оттуда (`Object` у элемента, `List` у списка). Без них отказ — основной реквизит формы объекта без типа объекта не бывает.
-    * `processing` — с `config`, где есть обработка `object_name`, основной реквизит — её `Object`; иначе (нет выгрузки, обработки в ней нет)
-      заготовка без основного реквизита и без реквизитов формы: внешняя обработка, диалог. `type_id` — тип основного реквизита, заданный явно
-      (GUID типа: Object обработки, элемента или List списка; у форм справочника и документа — вместо выгрузки).
+    * `processing` — тип основного реквизита один из четырёх источников: `config` с обработкой `object_name` (её `Object`), `type_id` (GUID
+      типа, заданный явно: Object обработки, элемента или List списка; у форм справочника и документа — вместо выгрузки), `root_xml` (корневой
+      XML выгрузки внешней обработки: `Object` и синоним для заголовка) либо `dialog=True` — заготовка без основного реквизита и без
+      реквизитов формы (форма-диалог). Ни одного источника — отказ: форма внешней обработки без основного реквизита не видит модуля обработки.
+    * `report` — то же, что `processing`, но по форме внешнего отчёта конструктора (основной реквизит `ОтчетОбъект`, нижняя панель с «Закрыть»): источник типа —
+      `config` с отчётом `object_name` («Отчет.Имя»), `type_id` либо `root_xml` (корневой XML внешнего отчёта); `dialog` — отказ.
     * `title` — заголовок формы; без него — по синониму объекта, как у конструктора, а без объекта «Форма».
     * `size` — `(ширина, высота)`; без него 400×300.
     """
@@ -220,15 +265,50 @@ def build(kind, object_name=None, config=None, title=None, size=None, type_id=No
     notes = []
     if type_id is not None and not re.fullmatch(r"[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", type_id):
         raise BlankError(f"type_id — GUID типа основного реквизита (вида 12345678-1234-1234-1234-123456789abc), а пришло {type_id!r}")
+    sources = [word for word, given in (("--type-id", type_id is not None), ("--root-xml", root_xml is not None),
+                                         ("--object/--config", config is not None)) if given]
+    if kind == "report" and dialog:
+        raise BlankError(DIALOG_REPORT_REFUSAL)
+    if (root_xml is not None or dialog) and kind not in EXTERNAL_KINDS:
+        raise BlankError(f"{'--root-xml' if root_xml is not None else '--dialog'} — ключ формы внешней обработки или отчёта (виды «processing», "
+                         f"«report»), а вид «{kind}» заводится на объект выгрузки (--object и --config) либо на --type-id")
+    if dialog and sources:
+        raise BlankError(f"--dialog (форма без основного реквизита) вместе с {', '.join(sources)} не берётся: тип основного реквизита либо задан, "
+                         "либо формы-диалога нет")
+    if root_xml is not None and len(sources) > 1:
+        raise BlankError(f"тип основного реквизита один: --root-xml вместе с {', '.join(w for w in sources if w != '--root-xml')} не берётся")
+    root = None
+    if root_xml is not None:
+        try:
+            root = metadata.external_root(root_xml)
+        except metadata.MetadataError as e:
+            raise BlankError(str(e)) from None
+        if root.kind != kind:
+            raise BlankError(f"корневой XML {root_xml}: объект {'ExternalReport' if root.kind == 'report' else 'ExternalDataProcessor'}, а вид «{kind}» "
+                             f"заводится на {'внешнюю обработку (ExternalDataProcessor)' if kind == 'processing' else 'внешний отчёт (ExternalReport)'}"
+                             + ("; в описании generate корню ExternalReport отвечает объект «ВнешнийОтчет.Имя» или «Отчет.Имя», корню ExternalDataProcessor — "
+                                "«ВнешняяОбработка.Имя» или «Обработка.Имя» (вид описания processing)" if for_generate else
+                                f"; форма {'внешнего отчёта — вид «report»' if root.kind == 'report' else 'внешней обработки — вид «processing»'}"))
+        type_id = root.object_type_id
     obj, why = _object_for(kind, object_name, config)
-    if kind != "processing" and obj is None and type_id is None:
+    if kind in EXTERNAL_KINDS and obj is None and type_id is None and not dialog:
+        tail = ""
+        if config is not None and object_name:
+            said = config.failed_reason(object_name)
+            what = "отчёта" if kind == "report" else "обработки"
+            tail = (f" (файл {what} «{object_name}» в выгрузке не прочитан: {said})" if said
+                    else f" (в выгрузке нет {'отчёта' if kind == 'report' else 'обработки'} «{object_name}»)")
+        if kind == "report":
+            raise BlankError((NO_TYPE_REPORT_GENERATE if for_generate else NO_TYPE_REPORT) + tail)
+        raise BlankError((NO_TYPE_GENERATE if for_generate else NO_TYPE_PROCESSING) + tail)
+    if kind not in EXTERNAL_KINDS and obj is None and type_id is None:
         raise BlankError(f"форма вида «{kind}» заводится на объект выгрузки: нужны --object («{OBJECT_WORDS[kind]}.Имя») и --config (каталог "
                          f"выгрузки конфигурации) — {why}. Основной реквизит формы объекта несёт тип этого объекта; без объекта заготовки нет. "
                          "Выгрузки нет, а GUID типа известен (Object у элемента, List у списка) — назовите его в --type-id: заготовка та же, "
                          "с панелями вида и основным реквизитом этого типа, без реквизитов объекта")
     if obj is not None and type_id is not None:
         raise BlankError("type_id и объект выгрузки вместе не берутся: тип основного реквизита один — либо из выгрузки, либо заданный явно")
-    external = kind == "processing" and obj is None and type_id is None
+    external = kind == "processing" and obj is None and type_id is None   # здесь только `dialog`: без источника типа выше отказ
     doc = load(file_name(kind, external))
     where = f"форма конструктора вида «{kind}»"
     if obj is not None:
@@ -238,15 +318,17 @@ def build(kind, object_name=None, config=None, title=None, size=None, type_id=No
             raise BlankError(f"object: {e}") from None
         retarget(doc, guid)
         notes.append(f"основной реквизит формы — тип «{MAIN_TYPE[kind]}» объекта «{obj.full_name}» ({guid})")
+    elif root is not None:
+        retarget(doc, type_id)
+        notes.append(f"основной реквизит формы — тип «Object» внешн{'его отчёта' if kind == 'report' else 'ей обработки'} «{root.name}» ({type_id}), из корневого XML")
     elif type_id is not None:
         retarget(doc, type_id)
         notes.append(f"основной реквизит формы — тип {type_id}, заданный явно")
-    elif kind == "processing":
-        notes.append(f"основного реквизита и реквизитов формы нет ({why}): внешняя обработка, диалог; реквизиты формы заводит операция "
-                     "add_attribute либо ключ attributes описания generate")
+    else:
+        notes.append(f"{DIALOG_NOTE}; реквизиты формы заводит операция add_attribute либо ключ attributes описания generate")
         where += ", без основного реквизита"
     if title is None:
-        synonym = getattr(obj, "synonym", "") if obj is not None else ""
+        synonym = getattr(obj, "synonym", "") if obj is not None else (root.synonym if root is not None else "")
         title = TITLE_FORMS[kind].format(s=synonym) if synonym else NO_OBJECT_TITLE
     width, height = size or DEFAULT_SIZE
     check_size(kind, (width, height))

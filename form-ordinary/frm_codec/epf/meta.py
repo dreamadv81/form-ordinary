@@ -139,11 +139,12 @@ class Meta:
 class Processing:
     """Разобранная обработка: контейнер, метаданные и обычные формы `{GUID формы: текст form.frm}`."""
 
-    def __init__(self, container, meta, forms, form_names):
+    def __init__(self, container, meta, forms, form_names, form_modules=None):
         self.container = container
         self.meta = meta
         self.forms = forms
         self.form_names = form_names
+        self.form_modules = form_modules if form_modules is not None else {}   # GUID формы → текст модуля формы (секция `module` Form.bin)
 
 
 def load(container):
@@ -169,7 +170,7 @@ def load(container):
         if chain[-1][1] is None and item is not None:
             quoted = re.search(r'"([^"]*)"', item.data.decode("utf-8-sig", "replace"))
             meta.objs[guid] = chain[:-1] + [(chain[-1][0], quoted.group(1) if quoted else None)]
-    forms, names = {}, {}
+    forms, names, modules = {}, {}, {}
     for item in container.items:
         name = item.name
         if not name.endswith(".0"):
@@ -195,7 +196,9 @@ def load(container):
             text = sections["form"]
             forms[guid] = text.decode("utf-8-sig") if isinstance(text, bytes) else text
             names[guid] = shown
+            body = sections.get("module")
+            modules[guid] = (body.decode("utf-8-sig", "replace") if isinstance(body, bytes) else body) if body is not None else ""
         elif binary and cls not in KNOWN_BINARY_CLASSES:
             raise EpfError(f"элемент {shown} ({name}) двоичного вида {"класса " + cls if cls else "вне внутренних метаданных"}: форма незнакомого класса, "
                            "не проверялось. " + WAY_OUT)
-    return Processing(container, meta, forms, names)
+    return Processing(container, meta, forms, names, modules)

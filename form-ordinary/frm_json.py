@@ -244,7 +244,7 @@ def cmd_edit(args):
     if args.siblings:
         siblings, said = _siblings(form_path, args.siblings, getattr(args, "origin", None))
         print(said)
-    doc, bsl, log = edit_mod.apply(doc, ops, bsl, siblings, getattr(args, "config", None), final_captions=True)
+    doc, bsl, log = edit_mod.apply(doc, ops, bsl, siblings, _config_of(args) if getattr(args, "root_xml", None) else getattr(args, "config", None), final_captions=True)
     for line in log:
         print(line)
     problems = validate_mod.validate(doc)
@@ -266,7 +266,8 @@ def cmd_edit(args):
     for line in edit_final_mod.caption_lines(doc, captions, original, str(form_path.resolve())) if captions else []:
         print(line)
     if render_to:
-        marks = _code_marks_pair(original, doc, form_path, module_before, bsl if args.bsl else module_before, getattr(args, "code_notes", None))
+        marks = _code_marks_pair(original, doc, form_path, module_before, bsl if args.bsl else module_before, getattr(args, "code_notes", None),
+                                 getattr(args, "root_xml", None))
         failed = _show_change(*_with_coded_titles(original, doc, marks), render_to, marks=marks)
         if failed:
             print(f"Форма записана; {failed}")
@@ -275,12 +276,13 @@ def cmd_edit(args):
     return 0
 
 
-def _code_marks_pair(original, doc, form_path, module_before, module_after, notes_path):
+def _code_marks_pair(original, doc, form_path, module_before, module_after, notes_path, root_xml=None):
     """Пометки кода «до» и «после» для `edit --render --code-notes`; отклонённые записи и отсутствие модуля называются в stderr."""
     if not notes_path:
         return (None, None)
     notes = brief_notes_mod.read(notes_path)
-    marks = (brief_marks_mod.module_marks(original, form_path, module_before, notes), brief_marks_mod.module_marks(doc, form_path, module_after, notes))
+    marks = (brief_marks_mod.module_marks(original, form_path, module_before, notes, root_xml=root_xml),
+             brief_marks_mod.module_marks(doc, form_path, module_after, notes, root_xml=root_xml))
     _say_code_marks(marks[0], module_before)
     return marks
 
@@ -431,10 +433,10 @@ def cmd_brief(args):
         raise ValueError("--code-notes: у формы нет модуля (form.bsl рядом или модуль в контейнере), разбирать нечего")
     notes = brief_notes_mod.read(args.code_notes) if args.code_notes else None
     if module is not None and notes is None and not args.no_code:
-        command = f"frm_json.py brief {args.form}" + (f" --config {args.config}" if args.config else "") + f" --code-notes {out / 'code-notes.json'}" + (
+        command = f"frm_json.py brief {args.form}" + (f" --config {args.config}" if args.config else "") + (f" --root-xml {args.root_xml}" if args.root_xml else "") + f" --code-notes {out / 'code-notes.json'}" + (
             f" -o {args.out}" if args.out else "")
         try:
-            task = brief_mod.code_task(doc, form, args.config, out, module, f"`{command}`")
+            task = brief_mod.code_task(doc, form, args.config, out, module, f"`{command}`", root_xml=args.root_xml)
         except edit_mod.EditError as why:
             print(f"ОТКАЗ: {why}", file=sys.stderr)
             return 2
@@ -446,7 +448,7 @@ def cmd_brief(args):
         print(f"Задание на разбор кода: {task['task']}")
         print(f"Модуль формы (номера строк записей — его): {task['module']}")
         print(f"Заготовка записей: {task['notes']}")
-        print(f"Досье не собрано; без разбора кода: frm_json.py brief {args.form} --no-code" + (f" --config {args.config}" if args.config else "") + (f" -o {args.out}" if args.out else ""))
+        print(f"Досье не собрано; без разбора кода: frm_json.py brief {args.form} --no-code" + (f" --config {args.config}" if args.config else "") + (f" --root-xml {args.root_xml}" if args.root_xml else "") + (f" -o {args.out}" if args.out else ""))
         return 0
     try:
         state = formstate_mod.read(args.state) if args.state else None
@@ -455,7 +457,7 @@ def cmd_brief(args):
         if state is not None and args.conditional:
             state["conditional"] = args.conditional
         brief = brief_mod.build(doc, form, args.config, out, module, getattr(args, "origin", None), notes, state, args.hidden or (state or {}).get("hidden", "hatch"), args.conditional or (state or {}).get("conditional", "plain"),
-                                getattr(args, "detail", None))
+                                getattr(args, "detail", None), root_xml=args.root_xml)
     except edit_mod.EditError as why:
         print(f"ОТКАЗ: {why}", file=sys.stderr)
         return 2
@@ -525,6 +527,8 @@ def cmd_anchors_check(args):
     for line in repair_mod.describe(found):
         print(line)
     for line in guides_mod.far_words(doc):
+        print(line.strip())
+    for line in guides_mod.below_words(doc):
         print(line.strip())
     panel_lines = guides_mod.panel_words(doc)
     for line in panel_lines:
@@ -976,6 +980,15 @@ def cmd_patterns(args):
     return 0
 
 
+def _config_of(args):
+    """`Config` по ключам `--config` (выгрузка конфигурации) и `--root-xml` (корневой XML внешней обработки или отчёта): любой из них, оба вместе
+    или `None`. Внешний объект и одноимённый объект выгрузки вместе — отказ (`metadata.load_for`)."""
+    try:
+        return metadata_mod.load_for(getattr(args, "config", None), getattr(args, "root_xml", None))
+    except metadata_mod.MetadataError as e:
+        raise ValueError(f"{'метаданные' if getattr(args, 'root_xml', None) else 'выгрузка конфигурации'}: {e}") from None
+
+
 def cmd_generate(args):
     """Форма по описанию из блоков-паттернов (`frm_codec.generate`): исходная форма + выгрузка + нормы → форма и
     отметка.
@@ -989,13 +1002,20 @@ def cmd_generate(args):
     desc = _read_json(args.description)
     ref, scratch = None, None
     from_blank = not args.form
+    blank_keys = [k for k, given in (("--type-id", args.type_id), ("--dialog", args.dialog)) if given]
+    if blank_keys and not from_blank:
+        raise ValueError(f"{', '.join(blank_keys)} — ключ{'и' if len(blank_keys) > 1 else ''} заготовки, а исходная форма названа (--form): "
+                         "заготовка не берётся, тип основного реквизита — у исходной формы")
     if from_blank:
-        made = generate_mod.blank_for_description(desc, config_dir=args.config)
+        made = generate_mod.blank_for_description(desc, config_dir=args.config, type_id=args.type_id, root_xml=args.root_xml, dialog=args.dialog)
         scratch = tempfile.TemporaryDirectory()
         pathlib.Path(scratch.name, "form.frm").write_bytes(made.frm_bytes())
         args.form = str(pathlib.Path(scratch.name, "form.frm"))
         args.blank_module = made.module
         print(f"Исходная форма не названа: взята заготовка навыка — {made.source}")
+        for note in made.notes:
+            if note.startswith(("основной реквизит формы", "форма-диалог")):       # размер и заголовок заготовки — не итог: их берёт описание
+                print(note)
     elif formsource.is_form_ref(args.form):
         notes = []
         data, ref = formsource.source_for_write(args.form, notes)
@@ -1008,22 +1028,24 @@ def cmd_generate(args):
             pathlib.Path(scratch.name, "form.frm").write_bytes(data)
             args.form = str(pathlib.Path(scratch.name, "form.frm"))
     try:
-        return _generate(args, desc, ref, from_blank)
+        return _generate(args, desc, ref, from_blank, _config_of(args) if args.root_xml else None)
     finally:
         if scratch is not None:
             scratch.cleanup()
 
 
-def _generate(args, desc, ref, from_blank=False):
+def _generate(args, desc, ref, from_blank=False, config=None):
     shell = None
     if args.render:
         try:
             shell = _read_form_doc(args.form)  # до записи: файл -o может лежать поверх --form
         except (ValueError, OSError):
             shell = None
+    if from_blank:
+        pathlib.Path(args.out).parent.mkdir(parents=True, exist_ok=True)       # как у `new`: каталог формы новой формы может не существовать
     was = formsource.exists_before([args.out])
     report = generate_mod.apply(desc, args.form, args.config, args.out, overwrite=args.overwrite,
-                                desc_path=args.description, siblings=args.siblings, relayout=args.relayout, from_blank=from_blank)
+                                desc_path=args.description, siblings=args.siblings, relayout=args.relayout, from_blank=from_blank, config=config)
     module_line = None
     if from_blank and not report.unchanged:        # как у `new`: пустой form.bsl рядом с -o, существующий не трогается (платформа пишет пустой модуль BOM-ом)
         module = pathlib.Path(args.out).with_name("form.bsl")
@@ -1074,9 +1096,10 @@ def cmd_new(args):
             raise ValueError(f"выгрузка конфигурации: {e}") from None
     if args.object and not args.config:
         raise ValueError("--object называет объект выгрузки и нужен вместе с --config (каталог выгрузки конфигурации); "
-                         "заготовка внешней обработки и диалога без объекта обходится обоими ключами")
+                         "внешняя обработка и внешний отчёт берут тип основного реквизита из --root-xml или --type-id")
     size = blank_mod.parse_size(args.size) if args.size else None
-    made = blank_mod.build(args.kind, object_name=args.object, config=config, title=args.title, size=size, type_id=args.type_id)
+    made = blank_mod.build(args.kind, object_name=args.object, config=config, title=args.title, size=size, type_id=args.type_id,
+                           root_xml=args.root_xml, dialog=args.dialog)
     out = pathlib.Path(args.out)
     if out.exists() and not args.overwrite:
         raise ValueError(f"{out} уже есть: новая форма его не затирает (--overwrite — затереть осознанно; готовую форму правят командой edit)")
@@ -1117,7 +1140,9 @@ def cmd_add_field(args):
         form_path = str(ref.frm) if ref.frm.is_file() else str(pathlib.Path(tmp, "form.frm"))
         if not ref.frm.is_file():
             pathlib.Path(form_path).write_bytes(data)
-        config = metadata_mod.load(args.config)
+        if not args.config and not args.root_xml:
+            raise ValueError("add-field берёт реквизиты объекта из метаданных: дайте --config (каталог выгрузки конфигурации) или --root-xml (корневой XML внешней обработки)")
+        config = _config_of(args)
         kind, object_name = describe_mod.hints_from_path(ref.frm.resolve())
         out = pathlib.Path(tmp, "dry.frm") if args.dry_run else pathlib.Path(args.out)
         if not args.dry_run and out.exists() and not args.overwrite and out.read_bytes() != pathlib.Path(form_path).read_bytes():
@@ -1190,7 +1215,7 @@ def cmd_describe(args):
     нашлось."""
     _out(args.out, "-o", form=False)
     doc, form = _form_or_doc(args.form)
-    config = metadata_mod.load(args.config) if args.config else None
+    config = _config_of(args)
     kind, object_name = describe_mod.hints_from_path(form.resolve())
     kind, object_name = args.kind or kind, args.object or object_name
     result = describe_mod.describe(doc, config, form_use=args.form_use, kind=kind, object_name=object_name)
@@ -1335,6 +1360,8 @@ def main(argv=None):
     p.add_argument("--config", help="каталог выгрузки конфигурации (Catalogs/, Documents/ в формате "
                                     "XML): объекты, реквизиты и табличные части для bind с путём "
                                     "\"Объект.Реквизит\" и для set_saved_values с реквизитом обработки")
+    p.add_argument("--root-xml", metavar="ФАЙЛ", help="корневой XML выгрузки внешней обработки или внешнего отчёта (<Имя>.xml): реквизиты и табличные части объекта формы "
+                                                      "для путей по метаданным; рядом можно дать --config (ссылочные типы реквизитов). Объект с тем же именем в выгрузке — отказ")
     p.add_argument("--render", metavar="CMP", help="после записи — картинка «до | после» (CMP.png или CMP.svg) и перечень "
                                                    "новых, сдвинутых и убранных элементов в stdout; если конвертер отказал, "
                                                    "правка остаётся записанной")
@@ -1357,9 +1384,13 @@ def main(argv=None):
     p.add_argument("--form", help="исходная форма: form.frm, Form.bin или каталог формы. Без ключа — заготовка навыка того же вида, "
                                   "что команда new (форма с нуля; docs/from-scratch.md); у справочника и документа тогда нужен --config")
     p.add_argument("--config", help="каталог выгрузки конфигурации (Catalogs/, Documents/, DataProcessors/ в XML); обязателен у "
-                                    "справочника и документа; у вида processing без него поля — только реквизиты формы")
+                                    "справочника и документа; у вида processing без него поля — только реквизиты формы; отчёт конфигурации — каталог Reports/")
     p.add_argument("-o", "--out", required=True, help="куда положить форму; …/Ext/form.frm рядом с Form.bin — и Form.bin соберётся; "
                    "сам Form.bin и каталог отвергаются")
+    p.add_argument("--type-id", help="без --form, вид processing: GUID типа Object обработки или отчёта (по имени в object) — тип основного реквизита заготовки (как у new)")
+    p.add_argument("--root-xml", metavar="ФАЙЛ", help="корневой XML выгрузки внешней обработки или отчёта (<Имя>.xml): поля и таблицы привязываются к реквизитам и табличным частям "
+                                                      "объекта; без --form — ещё и тип основного реквизита заготовки (как у new: обработка или отчёт по корню)")
+    p.add_argument("--dialog", action="store_true", help="без --form, вид processing: заготовка-диалог без основного реквизита (как у new; у отчёта — отказ)")
     p.add_argument("--overwrite", action="store_true",
                    help="затереть файл -o, который правили вручную после прошлой генерации или который не назван в отметке; "
                         "также перегенерировать описание, которое не изменилось")
@@ -1376,8 +1407,13 @@ def main(argv=None):
         "new", help="форма с нуля: пустая заготовка формы, как её создаёт конструктор (frm_codec.blank), и пустой form.bsl рядом",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description="Пустая форма обычного приложения (docs/from-scratch.md). Виды: " + ", ".join(blank_mod.KINDS) + ".\n"
-                    "processing — форма обработки: без --config внешняя обработка (диалог) без основного реквизита и реквизитов формы;\n"
-                    "с --config и --object Обработка.Имя — основной реквизит с типом Object этой обработки выгрузки.\n"
+                    "processing — форма обработки с основным реквизитом ОбработкаОбъект; его тип один из: --root-xml <Имя>.xml (корневой XML\n"
+                    "выгрузки внешней обработки), --type-id GUID (TypeId её GeneratedType category=Object), --object Обработка.Имя --config\n"
+                    "(обработка выгрузки конфигурации). Без источника типа — отказ; --dialog — форма-диалог без основного реквизита и\n"
+                    "реквизитов формы (модуль формы не видит реквизитов и экспортных методов модуля обработки).\n"
+                    "report — форма внешнего отчёта или отчёта конфигурации с основным реквизитом ОтчетОбъект (нижняя панель с кнопкой\n"
+                    "«Закрыть», «Сформировать» не ставится); тип: --root-xml (внешний отчёт), --type-id или --object Отчет.Имя --config;\n"
+                    "без источника типа и с --dialog — отказ.\n"
                     "catalog.item, document.item, catalog.list, document.list — с --config и --object: основной реквизит несёт тип объекта\n"
                     "(Object у элемента, List у списка). В заготовке панели формы как у конструктора и нет кнопок с обработчиками; у списка —\n"
                     "табличное поле со стандартными колонками. Новых форм в МЕТАДАННЫХ команда не заводит: форму объекту сначала создают в\n"
@@ -1387,9 +1423,14 @@ def main(argv=None):
                    "сам Form.bin и каталог отвергаются; существующий файл без --overwrite не затирается")
     p.add_argument("--title", help="заголовок формы; без него — по синониму объекта, как у конструктора, а без объекта «Форма»")
     p.add_argument("--size", metavar="ШxВ", help=f"размер формы в пикселях (умолчание {blank_mod.DEFAULT_SIZE[0]}x{blank_mod.DEFAULT_SIZE[1]}); панели встают по краям")
-    p.add_argument("--object", help="полное имя объекта выгрузки: «Справочник.Имя», «Документ.Имя», у processing «Обработка.Имя»; нужен вместе с --config")
-    p.add_argument("--config", help="каталог выгрузки конфигурации (Catalogs/, Documents/, DataProcessors/ в XML): по нему берётся тип основного реквизита")
+    p.add_argument("--object", help="полное имя объекта выгрузки: «Справочник.Имя», «Документ.Имя», у processing «Обработка.Имя», у report «Отчет.Имя»; нужен вместе с --config")
+    p.add_argument("--config", help="каталог выгрузки конфигурации (Catalogs/, Documents/, DataProcessors/, Reports/ в XML): по нему берётся тип основного реквизита")
     p.add_argument("--type-id", help="GUID типа основного реквизита, заданный явно, когда выгрузки нет, а тип известен (Object обработки, справочника, документа; List списка); вместе с --object не берётся")
+    p.add_argument("--root-xml", metavar="ФАЙЛ", help="processing, report: корневой XML выгрузки внешней обработки (<Имя>.xml, ExternalDataProcessor) или внешнего отчёта (ExternalReport): тип основного "
+                   "реквизита — его GeneratedType category=Object, заголовок — по синониму; вид формы по корню (processing — обработка, report — отчёт); вместе с --type-id, "
+                   "--object, --config, --dialog не берётся")
+    p.add_argument("--dialog", action="store_true", help="processing: форма-диалог без основного реквизита и реквизитов формы; модуль формы не видит "
+                   "реквизитов и экспортных методов модуля обработки; вместе с источником типа не берётся; у report — отказ")
     p.add_argument("--bsl-out", help="куда положить пустой модуль (умолчание form.bsl рядом с -o; существующий не трогается)")
     p.add_argument("--overwrite", action="store_true", help="затереть существующий файл -o")
     p = sub.add_parser(
@@ -1401,7 +1442,9 @@ def main(argv=None):
                     "реквизит формы не выводятся. Режим движка (полная раскладка) не включается: если бережный режим отказывает,\n"
                     "команда отказывает его словами без записи; выход — generate --relayout или edit.")
     p.add_argument("form", help="форма: form.frm, Form.bin или каталог формы")
-    p.add_argument("--config", required=True, help="каталог выгрузки конфигурации (Catalogs/, Documents/, DataProcessors/ в XML)")
+    p.add_argument("--config", help="каталог выгрузки конфигурации (Catalogs/, Documents/, DataProcessors/ в XML); нужен он или --root-xml")
+    p.add_argument("--root-xml", metavar="ФАЙЛ", help="корневой XML выгрузки внешней обработки или внешнего отчёта (<Имя>.xml): реквизиты и табличные части объекта формы "
+                                                      "для путей по метаданным; рядом можно дать --config (ссылочные типы реквизитов). Объект с тем же именем в выгрузке — отказ")
     p.add_argument("--attr", action="append", required=True, metavar="ИМЯ",
                    help="реквизит шапки (можно несколько раз; порядок — порядок вывода)")
     p.add_argument("--after", metavar="ПОЛЕ", help="поставить после этого поля, в его блоке (пробуется только это место, подвал под таблицей допустим); "
@@ -1423,6 +1466,8 @@ def main(argv=None):
     p.add_argument("form", help="форма: form.frm, Form.bin, каталог формы или документ уровня 1")
     p.add_argument("--config", help="каталог выгрузки конфигурации (Catalogs/, Documents/, DataProcessors/ в XML и формы под ним): "
                                     "метаданные объекта и стиль конфигурации по соседним формам того же вида")
+    p.add_argument("--root-xml", metavar="ФАЙЛ", help="корневой XML выгрузки внешней обработки или внешнего отчёта (<Имя>.xml): реквизиты и табличные части объекта формы "
+                                                      "для путей по метаданным; рядом можно дать --config (ссылочные типы реквизитов). Объект с тем же именем в выгрузке — отказ")
     p.add_argument("-o", "--out", help="каталог досье (умолчание — .v8tmp/brief/ рядом с формой)")
     p.add_argument("--origin", help="форма выгрузки (form.frm), копия которой строится: она не сосед для стиля конфигурации. Без ключа исключаются форма с тем же "
                                     "видом, объектом и именем формы в выгрузке и неправленая копия")
@@ -1462,6 +1507,8 @@ def main(argv=None):
                     "Описание записывается в -o или выводится в stdout; пояснения выводятся в stderr.")
     p.add_argument("form", help="form.frm, Form.bin, каталог формы или документ уровня 1 (.json)")
     p.add_argument("--config", help="каталог выгрузки конфигурации (Catalogs/, Documents/ в XML): имена реквизитов объекта")
+    p.add_argument("--root-xml", metavar="ФАЙЛ", help="корневой XML выгрузки внешней обработки или внешнего отчёта (<Имя>.xml): реквизиты и табличные части объекта формы "
+                                                      "для путей по метаданным; рядом можно дать --config (ссылочные типы реквизитов). Объект с тем же именем в выгрузке — отказ")
     p.add_argument("--form-use", choices=generate_mod.ROLE_FORMS,
                    help="у справочника с группами — форма элемента или группы (без ключа: по именам полей)")
     p.add_argument("--kind", help="вид описания, когда по метаданным его не найти (processing); для формы под "

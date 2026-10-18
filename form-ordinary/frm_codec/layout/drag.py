@@ -285,6 +285,7 @@ def window_warnings(form, grow_w, grow_h):
                            f"({'правый' if axis == 0 else 'нижний'} край {far} при окне {window[axis]}) — появится прокрутка и отнимет "
                            f"{layout.SCROLL} px у {'высоты' if axis == 0 else 'ширины'} окна (`Layout.bar_appears`)")
     out.extend(guides.far_words(form.doc))
+    out.extend(guides.below_words(form.doc))
     if grow_w > 0 or grow_h > 0:
         out.extend(guides.panel_words(form.doc))
     return out

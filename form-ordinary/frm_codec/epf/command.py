@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 
 from . import container as cont
-from . import copyinfo, meta
+from . import copyinfo, mainwarn, meta
 
 FOREIGN_NOTE = ("Ссылки форм на объекты конфигурации (стиль, тип справочника и т. п.) команда не дописывает: из одного файла "
                 "их не восстановить; нужны ли они платформе, не проверялось.")
@@ -35,14 +35,16 @@ def run(path, out=None, dry_run=False):
         if not proc.forms:
             return [f"{path.name}: обычных форм нет — файл не изменён"], 0, False
         res = copyinfo.merge(proc)
+        warned = mainwarn.warnings(proc)
     except cont.EpfError as exc:
         return [f"Отказ: {exc}"], 1, False
     if not res.changed:
-        return [f"{path.name}: copyinfo полный — файл не изменён", FOREIGN_NOTE], 0, False
+        return [f"{path.name}: copyinfo полный — файл не изменён", FOREIGN_NOTE] + warned, 0, False
     lines = [f"{path.name}: copyinfo дополнен — объектов {len(res.objects)}, типов {len(res.types)}, путей {len(res.paths)}"]
     for title, rows in (("объект", res.objects), ("тип", res.types), ("путь привязки", res.paths)):
         lines += [f"  {title}: {label}" for _, label in rows]
     lines.append(FOREIGN_NOTE)
+    lines += warned
     target = Path(out) if out else path
     if dry_run:
         lines.append(f"Пробный прогон: {target} не записан")
