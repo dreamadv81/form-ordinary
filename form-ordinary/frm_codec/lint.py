@@ -20,6 +20,10 @@
 8. Выравнивание расходится (`align`): в столбце из четырёх и более полей (надписей) с общим левым (правым) краем при проектном размере один
    элемент при ширине окна в полтора раза больше отходит от остальных больше чем на `ALIGN_TOL` px, а остальные не меньше трёх держатся вместе. Проверяются
    элементы формы и её страниц (не панелей); окно дальше предела раскладки формы модель не растягивает.
+9. Отступ от области страницы (`page_inset`): на странице панели закладок «Сверху», «Снизу» (в том числе с прокруткой) и «Слева (вертикально)»
+   ближайший к краю области видимый элемент (кроме командных панелей) ближе `layout.PAGE_INSET` (6 px, как у Конфигуратора), но не вплотную.
+   Вплотную (0) стоят крупные элементы страницы (таблица, табличный документ, рамка…) — это приём, сведения; прочие — замечание. У панели
+   с рамкой проверены левый и верхний отступ: край области справа и снизу у такой панели не снят.
 
 Диапазон большинства. Норма вида хранит у каждого показателя два перечня (первые 8 строк): значения по конфигурациям (норма — первое) и
 по формам с долями. Диапазон — от меньшего до большего из значений, дающих вместе не меньше `MAJORITY` форм, считая от самого
@@ -71,12 +75,20 @@ ANCHORS = {
 }
 GROUPS = {"rhythm": "ритм", "anchors": "привязки роли", "overlap": "наезд", "outside": "выход за форму",
           "narrow": "поле уже минимума", "caption": "подпись шире элемента", "design": "смесь версий и вида",
-          "align": "выравнивание расходится при растяжении"}
+          "align": "выравнивание расходится при растяжении", "page_inset": "отступ от области страницы"}
 ALIGN_TOL = 2  # края столбца совпадают (и выравнивание держится), если различаются не больше чем на столько px
 ALIGN_SHIFT = 5  # сдвиг от остальных не больше стольких px замечанием не считается
 ALIGN_MIN = 4  # столбец из стольких элементов и более: один выбивается, остальные (не меньше трёх) держатся вместе
 ALIGN_GROW = 1.5  # во сколько раз ширина окна больше проектной при проверке выравнивания
 ALIGN_TYPES = ("TextBox", "Label")  # поля ввода и надписи: у них столбцы с общим краем — норма раскладки
+# Виды закладок, у которых проверяется отступ от области страницы: норма 6 есть у большинства страниц корпуса; у «Не отображать» и «Слева (горизонтально)»
+# вложенные заполняют панель вплотную (0 — норма), у прочих видов область не снята.
+INSET_KINDS = ("Top", "TopScrolling", "Bottom", "BottomScrolling", "LeftVertical")
+# Элемент, который занимает страницу целиком: вплотную к области он стоит как приём, а не как прижатый текст.
+FILL_TYPES = frozenset({"TableBox", "SpreadsheetDocumentField", "TextDocumentField", "GroupBox", "Panel", "ListBox", "Chart", "GanttChart",
+                        "PivotChart", "Splitter", "Dendrogram", "HTMLDocumentField", "PDFDocumentField", "GraphicalSchema", "GeographicalSchema"})
+INSET_SIDES = (("слева", 0), ("сверху", 1), ("справа", 2), ("снизу", 3))
+FRAMED_SIDES = (0, 1)  # у панели с рамкой край области справа и снизу не снят: проверяются левый и верхний отступ
 DESIGN_CUT = 240  # слова `design` в замечании обрезаются: это ссылка, а не пересказ
 
 
@@ -435,6 +447,148 @@ def _outlier(lay, cluster, edge, word, kind, width):
     return Drift(odd, edge, word, kind, len(cluster), cluster[0].box[edge], width, shift)
 
 
+CLOSE_PX = 2  # отступ 0…2 px — «вплотную к рамке страницы», 3…5 — «ближе нормы»; род один
+
+
+def _page_key(page):
+    return (not isinstance(page, int), page if isinstance(page, int) else repr(page))
+
+
+def _px(value):
+    """Число в слова: целые пиксели, как печатают прочие замечания (модель отдаёт дробный край)."""
+    return int(round(value))
+
+
+def _span(item, which, form):
+    """`(края, откуда)`: края элемента для отступа (`which` 0 — файл, 1 — место в предприятии: `item.box`, если элемент стоит по правилам от области) и
+    для каждой из четырёх сторон элемент-источник края (`None` — сам элемент). Вложенная панель «Не отображать» без рамки невидима: берутся края
+    содержимого её видимой (первой) страницы, обрезанные по самой панели."""
+    box = _file_box(item) if which == 0 or not item.from_area else item.box
+    if item.type == "Panel" and layout._panel_tabs(item) == "DontUse" and layout._panel_unframed(item):
+        inner = form.holders.get(item.index)
+        kids = [c for c in (inner.children if inner else ()) if c.visible and c.type != "CommandBar" and not layout.hidden_page(c)]
+        if kids:
+            boxes = [_file_box(c) if which == 0 or not c.from_area else c.box for c in kids]
+            x0, y0 = box[0] + min(b[0] for b in boxes), box[1] + min(b[1] for b in boxes)
+            x1, y1 = box[0] + max(b[2] for b in boxes), box[1] + max(b[3] for b in boxes)
+            via = (min(zip(boxes, kids), key=lambda bk: bk[0][0])[1], min(zip(boxes, kids), key=lambda bk: bk[0][1])[1],
+                   max(zip(boxes, kids), key=lambda bk: bk[0][2])[1], max(zip(boxes, kids), key=lambda bk: bk[0][3])[1])
+            return (max(x0, box[0]), max(y0, box[1]), min(x1, box[2]), min(y1, box[3])), via
+    return box, (None,) * 4
+
+
+def _named(item, side, via):
+    """`«имя» (тип)`; у вложенной панели — через какой элемент на какой её странице отступ."""
+    text = f"«{item.label()}» ({item.type})"
+    inner = via[side] if via else None
+    return text[:-1] + f", через «{inner.label()}» на её странице {inner.page or 0})" if inner is not None else text
+
+
+def _least(item, box, axis):
+    """Наименьший размер элемента по оси: минимум типа (`layout.min_size`); `None` — у типа минимум не проверен, тесной области и сжатия по нему не утверждается."""
+    return layout.min_size(item)[axis] or None
+
+
+def _fix_words(side, cut, edge, near):
+    """Чем исправить. Область теснее наименьшего размера элемента плюс два отступа — размером панели (`move_element` панели); иначе сдвигом: левая и
+    верхняя стороны — с сохранением противоположного края, элемент постоянного размера сдвигают, а не сжимают. `near` — `[(элемент, его края)]`."""
+    axis = 0 if side in (0, 2) else 1
+    if any(_least(item, box, axis) is not None and _least(item, box, axis) + 2 * cut > edge[axis] for item, box in near):
+        return ("область страницы теснее наименьшего размера элемента плюс два отступа: исправляется размером панели "
+                "(`move_element` панели с новым `box`), а не сдвигом элемента")
+    shrinks = any(_least(item, box, axis) is not None and _least(item, box, axis) < box[axis + 2] - box[axis] for item, box in near)
+    size = ("ширину", "высоту")[axis]
+    keep = ("правый", "нижний")[axis]
+    # сдвиг до нормы уронит противоположный отступ ниже нормы (элемент растянут через страницу): сжатие нужно, проверен ли минимум типа или нет
+    squeezed = any(_px(box[axis] if side in (0, 1) else edge[axis] - box[axis + 2]) + _px(edge[axis] - box[axis + 2] if side in (0, 1) else box[axis]) < 2 * cut
+                   for item, box in near)
+    if side in (0, 1):
+        how = f"сдвиньте и сохраните {keep} край (уменьшите {size})" if shrinks or squeezed else "сдвиньте"
+    else:
+        how = f"уменьшите {size}" if squeezed else (f"сдвиньте или уменьшите {size}" if shrinks else "сдвиньте")
+    return f"`move_element` с `box` в координатах страницы и `\"anchor\": \"keep\"`: {how}"
+
+
+def _page_inset(result, doc, form):
+    """Отступ видимых вложенных от области страницы панели (`layout.panel_area`) ближе нормы `layout.PAGE_INSET`: замечание на сторону страницы.
+    Отступ меряется по месту в предприятии (`item.box` модели, когда элемент стоит по правилам от области), расхождение с файлом называется.
+    Отступ 0 у крупных элементов (`FILL_TYPES`) — приём, он идёт в сведения; больше нормы замечанием не бывает; элемент за областью — сведения.
+    Панель, у которой область не снята, — строка сведений.
+    """
+    cut = layout.PAGE_INSET
+    fills, blind, framed_note, outside, differs = [], [], [], [], []
+    for holder in form.holders.values():
+        owner = holder.item
+        if owner is None or owner.type != "Panel" or not owner.visible:
+            continue
+        kind = layout._panel_tabs(owner)
+        if kind in ("DontUse", "LeftHorizontal"):
+            continue  # вложенные заполняют панель: 0 — норма раскладки
+        pages = collections.defaultdict(list)
+        for item in holder.children:
+            if item.visible and item.type != "CommandBar":
+                pages[item.page].append(item)
+        if not pages:
+            continue
+        edge, why = layout.panel_area(doc, owner, holder.size)
+        framed = not layout._panel_unframed(owner)
+        if kind not in INSET_KINDS or edge is None:
+            blind.append(f"«{owner.qualified()}» ({why or 'норма отступа у этого вида закладок не снята'})")
+            continue
+        if framed:
+            framed_note.append(f"у «{owner.qualified()}» (рамка) проверены левый и верхний отступ; правый и нижний край области не сняты")
+        captions = layout.tab_captions(owner.node)
+        for page, items in sorted(pages.items(), key=lambda kv: _page_key(kv[0])):
+            file_spans = [_span(item, 0, form) for item in items]
+            model_spans = [_span(item, 1, form) for item in items]
+            label = f"страница {page}" + (f" «{captions[page]}»" if isinstance(page, int) and page < len(captions) and captions[page] else "")
+            for word, side in INSET_SIDES:
+                if framed and side not in FRAMED_SIDES:
+                    continue
+                inset = lambda box: _px(box[side] if side < 2 else (edge[side - 2] - box[side]))  # noqa: E731
+                where = f"«{owner.qualified()}», {label}, {word}"
+                for item, (box, via) in zip(items, model_spans):
+                    if inset(box) < 0:
+                        outside.append(f"{where}: {_named(item, side, via)} {inset(box)} px")
+                inside = [(inset(m[0]), inset(f[0]), item, m) for item, m, f in zip(items, model_spans, file_spans) if inset(m[0]) >= 0]
+                if not inside:
+                    continue
+                least = min(m for m, _f, _i, _s in inside)
+                near = [(f, item, span) for m, f, item, span in inside if m == least]
+                if least == 0:
+                    if all(item.type in FILL_TYPES for _f, item, _s in near):
+                        fills.append(f"{where}: " + ", ".join(f"«{i.label()}»" for _f, i, _s in near[:LIST]))
+                        continue
+                    near = [(f, item, span) for f, item, span in near if item.type not in FILL_TYPES]
+                elif not 0 < least < cut:
+                    file_least = min((f for _m, f, _i, _s in inside if f >= 0), default=cut)
+                    if 0 < file_least < cut:
+                        differs.append(f"{where}: в файле {file_least}, в предприятии {least}")
+                    continue
+                names = ", ".join(_named(item, side, span[1]) for _f, item, span in near[:LIST]) + (f" … и ещё {len(near) - LIST}" if len(near) > LIST else "")
+                changed = sorted({f for f, _i, _s in near if f != least})
+                seen = f"; в файле {', '.join(map(str, changed))}, в предприятии {least}: `box` расходится с правилами" if changed else ""
+                result.remarks.append(Remark(
+                    "page_inset", ", ".join(item.qualified() for _f, item, _s in near[:LIST]),
+                    f"{'вплотную к рамке страницы' if least <= CLOSE_PX else 'ближе нормы к рамке страницы'}: панель «{owner.qualified()}», {label} "
+                    f"(номер с нуля, как `page` в операциях), {word}: {names} — отступ {least} px от области страницы{seen}; норма Конфигуратора — "
+                    f"{cut} px от области страницы; исправление: {_fix_words(side, cut, edge, [(item, span[0]) for _f, item, span in near])}"))
+    if fills:
+        result.info.append("вплотную к области страницы (отступ 0) стоят крупные элементы страницы — приём, не замечание: " + "; ".join(fills[:LIST])
+                           + (f" и ещё {len(fills) - LIST}" if len(fills) > LIST else ""))
+    if outside:
+        result.info.append("элементы за областью страницы (отступ отрицательный; правилом не проверяются): " + "; ".join(outside[:LIST])
+                           + (f" и ещё {len(outside) - LIST}" if len(outside) > LIST else ""))
+    if differs:
+        result.info.append("отступ в файле меньше нормы, а в предприятии нет (`box` расходится с правилами от области): " + "; ".join(differs[:LIST])
+                           + (f" и ещё {len(differs) - LIST}" if len(differs) > LIST else ""))
+    if framed_note:
+        result.info.append("; ".join(framed_note[:LIST]) + (f" и ещё {len(framed_note) - LIST}" if len(framed_note) > LIST else ""))
+    if blind:
+        result.info.append("отступ от области страницы не проверяется у " + "; ".join(blind[:LIST])
+                           + (f" и ещё {len(blind) - LIST}" if len(blind) > LIST else ""))
+
+
 def _cut(text, limit=DESIGN_CUT):
     return text if len(text) <= limit else text[:limit].rsplit(" ", 1)[0] + " …"
 
@@ -493,6 +647,7 @@ def lint(doc, rel="", kind=None, table=None, siblings=None, share=MAJORITY):
     _geometry(result, form)
     _captions(result, doc, form)
     _drift(result, form)
+    _page_inset(result, doc, form)
     _design(result, doc, siblings)
     return result
 

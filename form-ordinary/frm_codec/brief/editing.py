@@ -492,6 +492,12 @@ def _page_groups(ctx):
     return [(ctx.short(holder), rows) for holder, rows in pages.items()]
 
 
+# Где ставить элемент на странице панели: `box` вложенного — от левого верха области страницы, отступ от её краёв — норма Конфигуратора (у формы — 8 от края).
+PAGE_PLACE_WORDS = (f"на странице панели с закладками «Сверху» и «Снизу» `box` — от левого верха области страницы (размер панели минус полоса закладок и линии страницы), "
+                    f"отступ элемента от краёв области — {layout.PAGE_INSET} px, как у Конфигуратора (у формы — 8 от её края); у панели «Не отображать» и «Слева (горизонтально)» "
+                    f"отступа нет — вложенные стоят вплотную, панель раскладывает форму")
+
+
 def _page_words(ctx):
     out = []
     for panel, rows in _page_groups(ctx):
@@ -543,6 +549,7 @@ def _notes(ctx, op):
         panels = _page_words(ctx)
         if panels:
             out.append("внутрь панели — `holder` и `page`: " + "; ".join(panels[:3]))
+            out.append(PAGE_PLACE_WORDS + "; без `box` элемент встаёт по соседям страницы, на пустой странице операция `box` требует")
         if ctx.pairs:
             out.append("надпись и поле пары — отдельные элементы, пару составляют двумя вызовами")
     elif op == "remove_element":
@@ -567,9 +574,12 @@ def _notes(ctx, op):
         panels = _page_words(ctx)
         if panels:
             out.append("на другую панель или страницу — `holder`, `page` либо `reparent`: " + "; ".join(panels[:3]))
+            out.append(PAGE_PLACE_WORDS)
     elif op == "reparent":
         panels = _page_words(ctx)
         out.append("панели и страницы: " + "; ".join(panels[:3]) if panels else "панелей со страницами на форме нет: переносить можно только на форму")
+        if panels:
+            out.append(PAGE_PLACE_WORDS + "; без `box` платформа ставит элемент в точку вставки (21, 21), поэтому `box` называют")
     elif op == "change_type":
         if ctx.refused:
             out.append(f"новый вид по шаблону из отказов версии {ctx.version} тоже откажет: " + ", ".join(n for n, _r in ctx.refused))

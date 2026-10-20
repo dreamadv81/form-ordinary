@@ -56,7 +56,7 @@ from .coeffs import (Cycle, coefficients, GROW_MIN, MOVE_MAX,
 from .limit_calc import (Limit, min_unmeasured, _named, _span,
     _overlap_interval, holder_limits, _center_border, _round_border,
     _steps_to_edge, _crossing, _moves, bounds)
-from .area import (PANEL_AREA_CUT, PANEL_HEIGHT_DERIVED, PICTURE_TOP_CUT, LEFT_STRIP_PAD,
+from .area import (PAGE_INSET, PANEL_AREA_CUT, PANEL_HEIGHT_DERIVED, PICTURE_TOP_CUT, LEFT_STRIP_PAD,
     LEFT_FRAME, TAB_PICTURE_WORDS, LEFT_TAB_WORDS, tab_pictures,
     tab_captions, panel_area, panel_not_checked, PANEL_KIND_RU,
     _NO_BORDER, _panel_unframed, _area, _same_edge,

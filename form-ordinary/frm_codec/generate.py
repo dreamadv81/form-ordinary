@@ -143,7 +143,7 @@ SIDE_GAP = rownorms.side_gap()[0]  # зазор между шапкой и бл�
 FRAME_TITLE_PAD = rownorms.frame_title_pad()[0]  # заголовок рамки шире своего текста на отступы слева и справа полной рамки (`render.groupbox.FULL_INDENT`, измерено в предприятии); корпус уже заголовка с этим отступом рамок не знает
 SPLIT_GAP = 6  # толщина разделителя: самая частая в корпусе (`anchors.SPLITTER_THICKNESS`: 6 px у 216 разделителей из 386)
 SPLIT_MIN_PART = {axis: rownorms.split_min(axis)[0] for axis in ("left_right", "top_bottom")}  # первая часть не уже (не ниже): наименьшая таблица рядом с разделителем в корпусе (`split_table`)
-NESTED = (6, 6, 6, 6)  # лево, верх, право, низ области страницы панели
+NESTED = (layout.PAGE_INSET,) * 4  # лево, верх, право, низ области страницы панели: норма Конфигуратора, одна на навык (`layout.area.PAGE_INSET`)
 # Область страницы «Сверху» — от левого верха панели; ширина = ширина панели − 2 (рамка по краям); высота = высота панели − 20 (полоса закладок 18 + рамки)
 PANEL_AREA = render_mod.PAGE_AREA_OFFSET["Top"]  # (1, 19)
 PANEL_AREA_W = 2
