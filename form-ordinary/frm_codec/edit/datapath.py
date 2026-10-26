@@ -28,7 +28,8 @@
 «обработка-объект», а объект берётся из выгрузки.
 
 Кроме пути `bind` записывает тип. У поля ввода это описатель типа и зеркало квалификаторов (`frm_codec/edit/datatype.py`), у
-колонки табличной части — тип колонки и вложенного поля ввода. Если сочетание «вид элемента и класс типа» не проверялось
+табличного поля на табличную часть — тип значения поля (`TypeId` части по выгрузке; части без `TypeId` — отказ), у колонки табличной части —
+тип колонки и вложенного поля ввода. Если сочетание «вид элемента и класс типа» не проверялось
 (флажок на небулев реквизит, число в надписи, составной тип), операция отказывает, а ключ `unverified` отказ снимает. Таблица
 привязывается к табличной части, только если все её колонки принадлежат виду колонки табличной части (`TABULAR_COLUMN`). На
 форме группы допускаются только стандартные реквизиты `Наименование` и `Родитель`; `Код` и `Владелец` не проверялись. Колонку
@@ -365,13 +366,15 @@ def corpus_words(kind, path_kind):
 class Plan:
     """Что `bind` запишет в элемент: шаги пути, слова отчёта и, если есть, тип поля ввода.
 
-    `type_edit` — это `(блок описателя, зеркало, класс)` или `None`, а `notes` — оговорки для отчёта.
+    `type_edit` — это `(блок описателя, зеркало, класс)` или `None`, `table_type` — тип значения табличного поля на табличной части (`TypeId`
+    части) или `None`, а `notes` — оговорки для отчёта.
     """
     steps: list
     said: str
     type_edit: object = None
     notes: tuple = ()
     path_kind: str = ""
+    table_type: object = None
 
 
 def element_steps(doc, data, place, config, unverified, who, form_use=None):
@@ -388,7 +391,7 @@ def element_steps(doc, data, place, config, unverified, who, form_use=None):
     target = resolve(found.obj, parts[1], form_use, unverified)
     kind_gate(target.kind, kind, unverified, f"{data!r}")
     said = f"{found.obj.full_name}.{target.name} — {PATH_WORDS[target.kind]}"
-    type_edit, notes = None, []
+    type_edit, table_type, notes = None, None, []
     if target.kind == "attribute":
         type_edit, notes = type_plan(place, kind, target.thing, cfg, unverified, data)
     elif target.kind == "standard":
@@ -400,7 +403,24 @@ def element_steps(doc, data, place, config, unverified, who, form_use=None):
             notes.append(f"«{target.name}» на форме группы не проверялся (unverified)")
     elif target.kind == "table":
         table_columns_gate(place.element, unverified, data)
-    return Plan([{STEP_VALUE: found.first}, dict(target.step)], said, type_edit, tuple(notes), target.kind)
+        table_type, notes = table_type_plan(place, target.thing, unverified, data)
+    return Plan([{STEP_VALUE: found.first}, dict(target.step)], said, type_edit, tuple(notes), target.kind, table_type)
+
+
+def table_type_plan(place, ts, unverified, who):
+    """Тип значения табличного поля на табличную часть `ts`: `(TypeId части, оговорки)`. Так пишет конструктор, а с нулевым или чужим типом
+    платформа загружает форму, но колонки таблицы выбрасывает (`frm_codec/tabletype.py`). Части без `TypeId` (в выгрузке нет `InternalInfo`
+    части) и неразобранный блок типа поля — отказ, снимаемый `unverified`: тогда пишется только путь."""
+    from .. import tabletype
+    have = tabletype.type_of(place.element)
+    if have is None or not ts.type_id:
+        why = ("у табличного поля не разобран блок типа значения (`content/u1`)" if have is None else
+               f"у табличной части «{ts.name}» в выгрузке нет TypeId (xr:GeneratedType category=\"TabularSection\" в InternalInfo части)")
+        if not unverified:
+            raise EditError(f"{who!r}: {why} — тип значения табличного поля записать нельзя, а с нулевым или чужим типом платформа загружает форму, "
+                            "но колонки таблицы выбрасывает. Позвать всё же можно — unverified=True: запишется только путь, тип поля останется прежним")
+        return None, [f"тип табличного поля не записан и остался {have or 'неразобранным'}: {why}"]
+    return ts.type_id, []
 
 
 def table_columns_gate(item, unverified, who):
@@ -459,7 +479,12 @@ def type_plan(place, kind, attr, cfg, unverified, who):
 
 
 def apply_type(place, plan, who):
-    """Записывает тип поля ввода по плану и возвращает слова для отчёта (пусто, если записывать нечего)."""
+    """Записывает тип поля ввода (у табличного поля на табличной части — тип таблицы) по плану и возвращает слова для отчёта (пусто, если
+    записывать нечего)."""
+    if plan.table_type is not None:
+        from .. import tabletype
+        was = tabletype.set_type(place.element, plan.table_type)
+        return "" if was == plan.table_type else f"; тип табличного поля: {was} → {plan.table_type} (TypeId табличной части по выгрузке)"
     if plan.type_edit is None:
         return ""
     block, mirror, cls = plan.type_edit

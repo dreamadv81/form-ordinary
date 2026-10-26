@@ -3154,7 +3154,7 @@ def apply(desc, form_path, config_dir, out_path, overwrite=False, desc_path=None
             doc, _bsl, log = edit.apply(doc, ops, config=config)
     except ed_base.EditError as e:
         raise GenerateError(f"редактор отказал на операции из описания: {e}") from None
-    problems = validate.validate(doc)
+    problems = validate.validate(doc, config=config)
     if validate.fatal(problems):
         first = [p.text for p in problems if p.fatal][:3]
         raise GenerateError("собранная форма не проходит проверку: " + "; ".join(first))

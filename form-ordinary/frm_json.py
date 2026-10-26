@@ -160,7 +160,7 @@ def cmd_validate(args):
         # иначе «замечаний нет» читалось бы как «документ проверен».
         raise ValueError("это уровень 0 (сырое дерево): трёх уровней проверки к нему нет, "
                          "проверку обратным разбором выполняет команда encode")
-    problems = validate_mod.validate(doc)
+    problems = validate_mod.validate(doc, config=_config_of(args))
     _say(problems)
     if not problems:
         print("Проверка пройдена: три уровня без замечаний")
@@ -244,11 +244,12 @@ def cmd_edit(args):
     if args.siblings:
         siblings, said = _siblings(form_path, args.siblings, getattr(args, "origin", None))
         print(said)
-    doc, bsl, log = edit_mod.apply(doc, ops, bsl, siblings, _config_of(args) if getattr(args, "root_xml", None) else getattr(args, "config", None), final_captions=True)
+    config = _config_of(args) if getattr(args, "root_xml", None) or getattr(args, "config", None) else None
+    doc, bsl, log = edit_mod.apply(doc, ops, bsl, siblings, config, final_captions=True)
     for line in log:
         print(line)
-    problems = validate_mod.validate(doc)
-    _say(problems, validate_mod.validate(original))
+    problems = validate_mod.validate(doc, config=config)
+    _say(problems, validate_mod.validate(original, config=config))
     if validate_mod.fatal(problems):
         return 1
     _say_layout(doc, before)
@@ -394,7 +395,7 @@ def cmd_lint(args):
     said = None
     if args.siblings:
         siblings, said = _siblings(form, args.siblings, getattr(args, "origin", None))
-    result = lint_mod.lint(doc, str(form.resolve()), kind=args.kind, siblings=siblings)
+    result = lint_mod.lint(doc, str(form.resolve()), kind=args.kind, siblings=siblings, config=_config_of(args))
     for line in result.info + ([said] if said else []):
         print(line)
     for remark in result.remarks:
@@ -1316,6 +1317,10 @@ def main(argv=None):
     p.add_argument("json"); p.add_argument("-o", "--out", required=True)
     p = sub.add_parser("validate", help="три уровня проверки: документ JSON либо форма (form.frm, Form.bin, каталог формы)")
     p.add_argument("json", help="документ уровня 1 (.json), form.frm, Form.bin или каталог формы")
+    p.add_argument("--config", help="каталог выгрузки конфигурации (Catalogs/, Documents/, DataProcessors/ в XML): ещё сверка типа таблиц на "
+                                    "табличных частях с TypeId части")
+    p.add_argument("--root-xml", metavar="ФАЙЛ", help="корневой XML выгрузки внешней обработки или внешнего отчёта (<Имя>.xml): то же для "
+                                                      "табличных частей внешнего объекта")
     p = sub.add_parser(
         "edit", help="правка формы перечнем операций (frm_codec.edit)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -1533,6 +1538,10 @@ def main(argv=None):
                                     "видом, объектом и именем формы в выгрузке и неправленая копия")
     p.add_argument("--kind", help="вид формы по перечню норм (catalog.item, document.list, processing …), когда по "
                                   "пути в выгрузке его не найти")
+    p.add_argument("--config", help="каталог выгрузки конфигурации (Catalogs/, Documents/, DataProcessors/ в XML): замечание о типе таблиц "
+                                    "на табличных частях (TypeId части)")
+    p.add_argument("--root-xml", metavar="ФАЙЛ", help="корневой XML выгрузки внешней обработки или внешнего отчёта (<Имя>.xml): то же для "
+                                                      "табличных частей внешнего объекта")
     p = sub.add_parser(
         "layout", help="раскладка при размерах окна: предел с ограничивающей парой, мёртвые "
                        "правила, элементы, остающиеся на месте на пути, координаты")

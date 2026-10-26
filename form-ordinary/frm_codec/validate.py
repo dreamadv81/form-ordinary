@@ -38,6 +38,10 @@
 со случайным платформа форму открывает и сохраняет, но меню не выпадает. Рядом, уровнем 2, — владелец кнопки (`_check_owners`), GUID набора
 КОМАНДНОЙ ПАНЕЛИ из словаря (`_check_panel_sets`) и ровно один набор у меню (`_check_menu_set_count`) — предупреждения: что ломает нарушение, не проверялось.
 
+**Тип значения табличного поля** (`_check_table_types`, `frm_codec/tabletype.py`) — предупреждение уровня 2: тип поля, не равный типу
+реквизита формы, к которому оно привязано (форма списка), и нулевой тип привязанного поля; с выгрузкой (`config`) — ещё тип таблицы на табличной
+части, не равный `TypeId` части. С чужим типом платформа загружает форму, но колонки таблицы выбрасывает; разбор и сборка этого не видят.
+
 **Вложенный элемент колонки проверяется в трёх местах.** Уровень 1 — форма конверта (`_check_packed`: содержимое есть, пустых кусков от нуля,
 раскладка из двух имён) и неразобранный конверт (предупреждение с причиной: он соберётся теми же байтами). Уровень 2 — вид назван ДВАЖДЫ, GUID у
 колонки и первым числом тела, и разошедшиеся — отказ (`_check_column_control`). Зеркала внутри тела считаются от элемента ЕГО вида
@@ -1542,6 +1546,13 @@ def _check_value_list_source(doc, path, out):
              "Источник данных такого поля — блок `2/3` со списком значений (`edit.columns.value_list_source_block`)")
 
 
+def _check_table_types(doc, out, config=None):
+    """Тип значения табличных полей формы против данных их привязки (`tabletype.findings`): предупреждения уровня 2 с адресом «поле/content/u1»."""
+    from . import tabletype
+    for found in tabletype.findings(doc, config):
+        _say(out, 2, False, (found.element, "content", "u1"), found.text)
+
+
 def _links_in_runs(doc, node_type, path, out, owner=None, carrier=None):
     """Связи внутри узла со счётными списками. Счётчик здесь не сверяется: в JSON его нет, он равен длине массива. «Счётчик против длины» — у
     списков с `count` (`Elements`, `PanelPages.v1`)."""
@@ -1898,8 +1909,10 @@ def _level_shape(doc, type_name, out):
     _check_shape(doc, type_name, (), out)
 
 
-def _level_links(doc, type_name, out):
+def _level_links(doc, type_name, out, config=None):
     _check_links(doc, type_name, (), out)
+    if type_name == "Form":
+        _check_table_types(doc, out, config)
     _check_guids(doc, (), out)
     _check_picture_shapes(doc, (), out)
     _check_dec_places(doc, (), out)
@@ -1917,9 +1930,10 @@ def _level_round_trip(doc, type_name, out):
     _check_round_trip(doc, type_name, out)
 
 
-def validate(doc, levels=LEVELS, type_name="Form"):
+def validate(doc, levels=LEVELS, type_name="Form", config=None):
     """Замечания по документу: форма (1), связи (2), проверка обратным разбором (3). Следующий уровень не спрашивается, если предыдущий нашёл отказ. Список замечаний, а не
-    первое: JSON правят руками. Несуществующий уровень — отказ: пустой список читается как «всё хорошо»."""
+    первое: JSON правят руками. Несуществующий уровень — отказ: пустой список читается как «всё хорошо». `config` — выгрузка конфигурации
+    (`metadata.Config`): с ней уровень 2 сверяет ещё тип таблицы на табличной части с `TypeId` части."""
     unknown = [level for level in levels if level not in LEVELS]
     if unknown:
         raise ValueError(f"уровня проверки {', '.join(str(level) for level in unknown)} нет; "
@@ -1930,7 +1944,7 @@ def validate(doc, levels=LEVELS, type_name="Form"):
     if old:
         return [Problem(1, True, where, text) for where, text in old]
     # Проверка «дальше не идём» одна на все три уровня: отдельные условия разошлись бы.
-    for level, step in ((1, _level_shape), (2, _level_links), (3, _level_round_trip)):
+    for level, step in ((1, _level_shape), (2, lambda d, t, o: _level_links(d, t, o, config)), (3, _level_round_trip)):
         if level in levels and not fatal(out):
             step(doc, type_name, out)
     return out

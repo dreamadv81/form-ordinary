@@ -24,6 +24,9 @@
    ближайший к краю области видимый элемент (кроме командных панелей) ближе `layout.PAGE_INSET` (6 px, как у Конфигуратора), но не вплотную.
    Вплотную (0) стоят крупные элементы страницы (таблица, табличный документ, рамка…) — это приём, сведения; прочие — замечание. У панели
    с рамкой проверены левый и верхний отступ: край области справа и снизу у такой панели не снят.
+10. Тип табличного поля (`table_type`): тип значения табличного поля не равен типу данных, к которым оно привязано, — реквизита формы (таблица
+   формы списка), нулевой у привязанного поля, а с выгрузкой (`config`) — не `TypeId` табличной части. Правило одно с предупреждением `validate`
+   (`tabletype.findings`): с чужим типом платформа загружает форму, но колонки таблицы выбрасывает.
 
 Диапазон большинства. Норма вида хранит у каждого показателя два перечня (первые 8 строк): значения по конфигурациям (норма — первое) и
 по формам с долями. Диапазон — от меньшего до большего из значений, дающих вместе не меньше `MAJORITY` форм, считая от самого
@@ -38,7 +41,7 @@
 """
 import collections
 
-from . import census, design, layout, patterns, textgap, textwidth
+from . import census, design, layout, patterns, tabletype, textgap, textwidth
 from .edit.base import EditError
 
 MAJORITY = 0.9  # диапазон большинства: значения, дающие вместе не меньше этой доли наблюдений форм
@@ -75,7 +78,8 @@ ANCHORS = {
 }
 GROUPS = {"rhythm": "ритм", "anchors": "привязки роли", "overlap": "наезд", "outside": "выход за форму",
           "narrow": "поле уже минимума", "caption": "подпись шире элемента", "design": "смесь версий и вида",
-          "align": "выравнивание расходится при растяжении", "page_inset": "отступ от области страницы"}
+          "align": "выравнивание расходится при растяжении", "page_inset": "отступ от области страницы",
+          "table_type": "тип табличного поля"}
 ALIGN_TOL = 2  # края столбца совпадают (и выравнивание держится), если различаются не больше чем на столько px
 ALIGN_SHIFT = 5  # сдвиг от остальных не больше стольких px замечанием не считается
 ALIGN_MIN = 4  # столбец из стольких элементов и более: один выбивается, остальные (не меньше трёх) держатся вместе
@@ -602,9 +606,10 @@ def _design(result, doc, siblings):
         result.remarks.append(Remark("design", "", f"{kind}: {_cut(text)} — подробно: frm_json.py design"))
 
 
-def lint(doc, rel="", kind=None, table=None, siblings=None, share=MAJORITY):
+def lint(doc, rel="", kind=None, table=None, siblings=None, share=MAJORITY, config=None):
     """Замечания к документу формы уровня 1: `Result`. `rel` — путь формы в выгрузке (по нему определяется вид), `kind` называет вид
-    явно, `table` — таблица норм (умолчание — `patterns.json`), `siblings` — свод соседей для сверки со своей конфигурацией.
+    явно, `table` — таблица норм (умолчание — `patterns.json`), `siblings` — свод соседей для сверки со своей конфигурацией, `config` —
+    выгрузка конфигурации (`metadata.Config`) для типа таблиц на табличных частях.
     Испорченный документ — `edit.EditError` словами; решает вызывающий (`validate`).
     """
     table = patterns.load() if table is None else table
@@ -649,6 +654,8 @@ def lint(doc, rel="", kind=None, table=None, siblings=None, share=MAJORITY):
     _drift(result, form)
     _page_inset(result, doc, form)
     _design(result, doc, siblings)
+    for found in tabletype.findings(doc, config):
+        result.remarks.append(Remark("table_type", found.element, found.text))
     return result
 
 
