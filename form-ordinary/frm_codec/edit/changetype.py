@@ -36,7 +36,7 @@ import copy
 
 from .. import design as _design, props, templates as _templates
 from . import ctxmenu as _ctxmenu, datapath as _datapath
-from .base import EditError, _caption_places, find_element, layout_block
+from .base import EditError, _caption_places, control_slot, find_element, layout_block
 from .data import _event_place, bind, event_code
 from .elements import _old_version_node, _short, _siblings_pool, _title, _version_check
 from .names import (
@@ -278,7 +278,7 @@ def _links(doc, place, new_kind, left, said):
     except EditError:
         layout = None
     control = layout.get(DEFAULT_CONTROL) if isinstance(layout, dict) else None
-    page = place.page
+    page = control_slot(layout, place.page) if isinstance(place.page, int) else None
     if isinstance(control, list) and isinstance(page, int) and 0 <= page < len(control) and control[page] == index:
         if new_kind in NO_DEFAULT_CONTROL:
             control[page] = NO_REFERENCE

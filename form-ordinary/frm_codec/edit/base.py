@@ -44,6 +44,7 @@ from .names import (
     PAGE,
     PAGES,
     PAGE_ITEMS,
+    SEPARATE_BY_PAGE,
     SHOW_TABS,
     PAGE_SEQUENCE,
     TEXT,
@@ -489,6 +490,15 @@ def pages_count(holder):
     return None if block is None else len(block[PAGES][PAGE_ITEMS])
 
 
+def no_pages_words(holder):
+    """Почему у родителя не видно страниц: у панели, чей блок раскладки лежит сырым, страницы есть, но их не видно; у прочих их не бывает."""
+    content = holder.get(CONTENT) if isinstance(holder, dict) and holder.get("type") == "Panel" else None
+    if isinstance(content, dict) and any(isinstance(v, dict) and set(v) == {"raw"} for v in content.values()):
+        return ("страницы у этой панели есть, но её блок раскладки лежит сырым (разбор не узнал его строения, `validate` называет причину), "
+                "и страниц редактор не видит")
+    return "страниц не бывает вовсе"
+
+
 def _guide_pattern(block):
     """Четыре направляющие первой страницы как образец, выбранные по номерам 1…4. Нельзя брать первые четыре в списке, потому что
     человек мог добавить свои направляющие.
@@ -616,11 +626,24 @@ def _fit_guides(node, width, height, doc=None, unverified=False):
     for page in range(pages):
         out += _make_guides(block, pattern, page, width, height, node=node, doc=doc, unverified=unverified)
     block[GUIDES] = out
-    # по числу `АктивизироватьПоУмолчанию` на страницу
+    # по числу `АктивизироватьПоУмолчанию` на страницу, а без «Распределять по страницам» — одно на родитель
     current = block.get(DEFAULT_CONTROL)
     if isinstance(current, list):
-        block[DEFAULT_CONTROL] = (current + [NO_REFERENCE] * pages)[:pages]
+        wanted = min(pages, 1) if one_default_control(block) else pages
+        block[DEFAULT_CONTROL] = (current + [NO_REFERENCE] * wanted)[:wanted]
     return pages
+
+
+def one_default_control(block):
+    """`True`, если «АктивизироватьПоУмолчанию» родителя — одно число на весь родитель: так платформа пишет его без «Распределять по
+    страницам» (`separate_by_page`), сколько бы ни было страниц. Иначе — по числу на страницу."""
+    return isinstance(block, dict) and block.get(SEPARATE_BY_PAGE) is False
+
+
+def control_slot(block, page):
+    """Место элемента со страницы `page` в списке «АктивизироватьПоУмолчанию» родителя: номер страницы, а у родителя без «Распределять по
+    страницам» — единственное число."""
+    return 0 if one_default_control(block) else page
 
 
 def _layout_rows(holder):
@@ -638,6 +661,8 @@ def _panel_pages(doc, panel):
     place = find_element(doc, panel)
     block = layout_block(place.element, need=False)
     if block is None:
+        if no_pages_words(place.element) != "страниц не бывает вовсе":
+            raise EditError(f"у элемента {panel!r}: {no_pages_words(place.element)}")
         raise EditError(f"у элемента {panel!r} ({place.element.get('type')}) страниц не бывает "
                         "— страницы бывают у панели и у контейнера формы")
     return place, block

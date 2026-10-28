@@ -347,12 +347,16 @@ def masked_slot(segment, name):
 
 @dataclass(frozen=True)
 class Along:
-    """Парный отрезок: столько СКАЛЯРОВ, сколько узлов в списке соседнего поля."""
+    """Парный отрезок: столько СКАЛЯРОВ, сколько узлов в списке соседнего поля.
+
+    `one_unless` — имя флага того же узла: при флаге 0 скаляр ОДИН на весь узел (при пустом списке — ни одного), сколько бы узлов ни было в
+    списке. Так платформа пишет «АктивизироватьПоУмолчанию» родителя без «Распределять по страницам»."""
     name: str
     kind: str
     source: str
     items_of: str
     note: str = None
+    one_unless: str = None
 
     def __post_init__(self):
         if self.kind != INT:
@@ -693,9 +697,11 @@ _add(NodeType("LayoutList", {
              note="Свойство формы «Исп. только видимую область». В файле флаг перевёрнут: 1 "
                   "означает, что галочка в палитре снята. Карта значение не переворачивает."),
     }, length=1),
-    Along("default_control", INT, source="exp", items_of="pages",
+    Along("default_control", INT, source="exp", items_of="pages", one_unless="separate_by_page",
           note="Свойство «АктивизироватьПоУмолчанию»: номер элемента, по одному числу на каждую "
-               "страницу формы. Значение 4294967295 (−1) означает, что элемент не задан."),
+               "страницу формы, если у формы стоит «Распределять по страницам» (`separate_by_page`), "
+               "и одно число на всю форму, если не стоит. Значение 4294967295 (−1) означает, что элемент "
+               "не задан."),
     Fixed({
         0: F("picture_location", ENUM, enum="Form.PictureLocation", source="exp",
              note="Свойство формы «ПоложениеКартинки». В палитре строка доступна, только если "
@@ -1349,9 +1355,10 @@ _add(NodeType("Content.Panel.u1", runs=Runs(2, (
              note="Свойство панели «Исп. только видимую область» (группа «Редактирование»). В "
                   "файле флаг перевёрнут, как у формы: 1 означает, что галочка снята."),
     }, length=1),
-    Along("default_control", INT, source="corpus", items_of="pages",
+    Along("default_control", INT, source="corpus", items_of="pages", one_unless="separate_by_page",
           note="Свойство «АктивизироватьПоУмолчанию»: по одному числу на каждую страницу панели, "
-               "как у формы."),
+               "если у панели стоит «Распределять по страницам» (`separate_by_page`), и одно число на "
+               "всю панель, если не стоит, — как у формы."),
     Fixed({
         0: F("picture_location", ENUM, enum="Panel.PictureLocation", source="exp",
              note="Свойство панели «ПоложениеКартинки». В палитре строка доступна, только если "
@@ -3229,12 +3236,12 @@ ENUMS = {
     # Кодов ДВА, хотя в списке палитры пять пунктов (Лево, Верх, Право, Низ, Центр) — остальные три
     # никто не ставил.
     "Panel.PictureLocation": Enum({"Right": 3, "Center": 5}, source="exp",
-                                  seen=((0, 11), (2, 1)),
+                                  seen=((2, 1),),
                                   note="Свойство панели «ПоложениеКартинки» "
                                        "(`ПоложениеКартинкиПанели` в справочнике); проверены два "
                                        "значения из пяти."),
     "Form.PictureLocation": Enum({"Right": 3, "Center": 5}, source="exp",
-                                 seen=((4, 3), (2, 1), (64, 1)),
+                                 seen=((4, 3), (2, 1)),
                                  note="Свойство формы «ПоложениеКартинки»; коды те же, что у "
                                       "панели."),
     "TableBox.HorizontalScrollBar": Enum({"DontUse": 0, "UseAlways": 1, "AutoUse": 2},
@@ -3953,6 +3960,14 @@ def read_runs(node_type, children, why=None):
             if count is None:
                 return _no(why, f"парному отрезку {segment.name} не у кого спросить длину: "
                                 f"список {segment.items_of} не читается")
+            if segment.one_unless is not None:
+                flag_at = named.get(segment.one_unless)
+                flag = _head_int(children, flag_at) if flag_at is not None else None
+                if flag not in (0, 1):
+                    return _no(why, f"длину парного отрезка {segment.name} задаёт и флаг {segment.one_unless}, а на его месте "
+                                    + (_shown(children, flag_at) if flag_at is not None else "ничего нет"))
+                if flag == 0:
+                    count = min(count, 1)
             first = at
         if count < 0 or first + count > len(children):
             return _no(why, f"{_ordinal(seen + 1)} список ({segment.name}) обещает "
@@ -4122,7 +4137,20 @@ def doc_runs(node_type, doc):
             if count is None:
                 raise SchemaError(f"{segment.name}: длину этого отрезка задаёт список внутри "
                                   f"{segment.items_of}, а прочесть его там нечем")
+            single = False
+            if segment.one_unless is not None:
+                flag = doc.get(segment.one_unless)
+                if not isinstance(flag, bool):
+                    raise SchemaError(f"{segment.name}: длину этого отрезка задаёт и флаг {segment.one_unless} (true или false), "
+                                      f"а пришло {flag!r}")
+                single = not flag
+                if single:
+                    count = min(count, 1)
             if count != len(items):
+                if single:
+                    raise SchemaError(f"{segment.name}: в списке {len(items)}, а при {segment.one_unless} = false "
+                                      "(«Распределять по страницам» снято) отрезок — одно число на весь родитель, сколько бы ни было "
+                                      f"узлов в {segment.items_of}")
                 raise SchemaError(f"{segment.name}: в списке {len(items)}, а в {segment.items_of} "
                                   f"узлов {count} — отрезок идёт по одному на каждый, и своего "
                                   "счётчика у него в файле нет")

@@ -114,9 +114,10 @@ def _page_number(target, page, who):
 
 def _default_control_words(holder, page, index):
     """Слова отказа, если элемент — «АктивизироватьПоУмолчанию» своей страницы (флаг лежит в списке прежнего родителя)."""
-    from .base import layout_block
+    from .base import control_slot, layout_block
     block = layout_block(holder, need=False)
     control = block.get(DEFAULT_CONTROL) if isinstance(block, dict) else None
+    page = control_slot(block, page) if isinstance(page, int) else page
     if isinstance(control, list) and isinstance(page, int) and 0 <= page < len(control) and control[page] == index:
         return (f"элемент — «АктивизироватьПоУмолчанию» своей страницы: флаг лежит в списке прежнего родителя, и что платформа делает с ним при "
                 "переносе, не проверялось. Снимите его (`set_property` с `default_control: false`), перенесите элемент и поставьте флаг "

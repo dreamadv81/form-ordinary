@@ -415,6 +415,54 @@ def _pack_one(container, force):
     return ("built", f"{container}: собран") if rebuilt else ("same", f"{container}: не изменился")
 
 
+# Модуль новой формы: платформа пишет пустой модуль одной меткой порядка байтов.
+EMPTY_MODULE = b"\xef\xbb\xbf"
+
+
+def create_command(path, force):
+    """`pack --create`: новый `Form.bin` у формы, контейнера которой ещё нет (метаданные формы созданы вне конфигуратора). Секции — `form` из
+    `form.frm`, `module` из `form.bsl` (нет файла — пустой модуль, и тот же `form.bsl` кладётся рядом), `info` — только из непустого `info.txt`:
+    у большинства контейнеров платформы этой секции нет. Упаковщик тот же, что у пересборки. Отказ словами: контейнер уже есть, `form.frm` нет
+    или он не разбирается, каталог с внешней сборкой без `force`. Возвращает `(строки отчёта, код возврата)`."""
+    ref = locate(path)
+    if ref.plain:
+        raise ValueError(f"{ref.frm}: контейнер собирают рядом с form.frm (…/Ext/form.frm), а у файла другое имя")
+    if ref.bin is not None:
+        raise ValueError(f"рядом с {ref.frm} Form.bin уже есть ({ref.bin.name}): --create делает новый контейнер, а этот пересобирает "
+                         "frm_json.py pack без ключа")
+    if not ref.frm.is_file():
+        raise ValueError(f"нет файла {ref.frm}: собирать контейнер не из чего")
+    if not force and under_mirror(ref.dir):
+        raise ValueError(f"{ref.dir} лежит в каталоге с внешней сборкой ({MIRROR_STATE} выше по дереву): Form.bin собирает внешний инструмент "
+                         "при отправке файлов; ключ --force соберёт его вручную")
+    _parse_check(ref.dir, [FORM_FILE])
+    module_path, info_path = ref.dir / "form.bsl", ref.dir / "info.txt"
+    lines = []
+    sections = {formbin.SECTION_FORM: ref.frm.read_bytes()}
+    if module_path.is_file():
+        sections[formbin.SECTION_MODULE] = module_path.read_bytes()
+    else:
+        sections[formbin.SECTION_MODULE] = EMPTY_MODULE
+    info = info_path.read_bytes() if info_path.is_file() else b""
+    if info:
+        sections[formbin.SECTION_INFO] = info
+    packed = formbin.pack(sections)
+    target = ref.dir / formbin.BIN_NAME
+    tmp = target.with_name(target.name + ".create")
+    try:
+        tmp.write_bytes(packed)
+        os.replace(tmp, target)
+    except OSError:
+        tmp.unlink(missing_ok=True)
+        raise
+    if not module_path.is_file():
+        module_path.write_bytes(EMPTY_MODULE)
+        lines.append(f"{module_path}: модуля не было — положен пустой (как у новой формы платформы)")
+    parts = ["form", "module"] + (["info"] if info else [])
+    lines.append(f"{target}: Form.bin создан ({len(packed)} байт; секции {', '.join(parts)})")
+    return lines, 0
+
+
 def pack_command(path, everything, force):
     """`pack`: собирает `Form.bin` там, где `form.frm`/`form.bsl`/`info.txt` разошлись с секциями. В каталоге с внешней
     сборкой отказывает (собирает внешний инструмент), с `force` собирает. Файлы, устаревшие относительно контейнера, и нечитаемый `form.frm` —

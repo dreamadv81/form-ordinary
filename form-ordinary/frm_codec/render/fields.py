@@ -575,8 +575,8 @@ def sheet_focused(doc, it):
     holder = it.owner.node if getattr(it, "owner", None) is not None else edit.container(doc)
     block = edit.layout_block(holder, need=False)
     control = block.get(DEFAULT_CONTROL) if isinstance(block, dict) else None
-    page = it.page or 0
-    return isinstance(control, list) and page < len(control) and control[page] == it.index
+    slot = edit.control_slot(block, it.page or 0)
+    return isinstance(control, list) and slot < len(control) and control[slot] == it.index
 
 
 def _sheet_box(doc, it, x, y, w, h):

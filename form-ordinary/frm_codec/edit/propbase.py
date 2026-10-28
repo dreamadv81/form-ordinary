@@ -282,7 +282,7 @@ ELEMENT_PICTURE_SETS = frozenset(name for name in schema.MAP
 # 7 — восемь, версии 8 — девять; у панели так же; у поля картинки версии 3 бывает восемь и девять позиций.
 # Длиннее девяти наборов нет.
 PICTURE_SET_LENGTH = 9
-CORPUS_ELEMENT_PICTURE_SETS = {"PictureSet.Label": 33374, "PictureSet.Panel": 9130,
+CORPUS_ELEMENT_PICTURE_SETS = {"PictureSet.Label": 33374, "PictureSet.Panel": 9143,
                                "PictureSet.PictureBox": 3269}
 
 SHORTCUT_NODE = "Shortcut"
@@ -371,7 +371,7 @@ def _unnamed_position(root, found_all, name, whose):
 CORPUS_PICTURE_BODIES = 3441
 # Всего картинок в корпусе. У каждой по длине записи однозначно определяется метка: у каждого поля каждого якоря
 # при одном источнике одной длине соответствует одна метка.
-CORPUS_PICTURES = 276131
+CORPUS_PICTURES = 276241
 # Слова отказа для флагов строения вне карты, по одному на каждый (`props.STRUCTURE_FLAGS`).
 STRUCTURE_FLAG_WORDS = {
     ("Picture", "source"): (

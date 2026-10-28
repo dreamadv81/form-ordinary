@@ -45,6 +45,8 @@ from .base import (
     container,
     elements_of,
     layout_block,
+    no_pages_words,
+    one_default_control,
     set_text,
 )
 from .elements import CORPUS_FORM_PAGES, _renumber
@@ -104,7 +106,7 @@ def add_page(doc, panel, name, caption=None, donor=None, unverified=False):
         raise
     block[PAGES][PAGES_COUNT] = len(pages)
     block[GUIDES] = block[GUIDES] + guides
-    if isinstance(block.get(DEFAULT_CONTROL), list):
+    if isinstance(block.get(DEFAULT_CONTROL), list) and not one_default_control(block):
         block[DEFAULT_CONTROL] = block[DEFAULT_CONTROL] + [NO_REFERENCE]
     return f"{panel}: страница {name!r}, страниц {len(pages)}; " + "; ".join(words)
 
@@ -202,7 +204,7 @@ def page_number(holder_node, page, who):
         return page
     block = layout_block(holder_node, need=False)
     if block is None:
-        raise EditError(f"у {who} страниц не бывает вовсе — страницу по имени {page!r} искать негде (page: 0 — единственное место)")
+        raise EditError(f"у {who} {no_pages_words(holder_node)} — страницу по имени {page!r} искать негде (page: 0 — единственное место)")
     return _page_by_name(block[PAGES][PAGE_ITEMS], page, who)
 
 
@@ -2474,7 +2476,7 @@ def add_form_page(doc, name=None, caption=None, donor=None, keep_tabs=False, unv
     pages.append(page)
     block[PAGES][PAGES_COUNT] = len(pages)
     block[GUIDES] = block[GUIDES] + guides
-    if isinstance(block.get(DEFAULT_CONTROL), list):
+    if isinstance(block.get(DEFAULT_CONTROL), list) and not one_default_control(block):
         block[DEFAULT_CONTROL] = block[DEFAULT_CONTROL] + [NO_REFERENCE]
     said = [f"форма: страница {name!r}, страниц {len(pages)}; направляющие новой страницы "
             f"({coords[0]}, {coords[1]}, {coords[2]}, {coords[3]})"]
@@ -2718,7 +2720,7 @@ def _remove_page_of(holder_node, block, name, who, gate=None):
         left.append(guide)
     block[GUIDES] = left
     control = block.get(DEFAULT_CONTROL)
-    if isinstance(control, list) and at < len(control):
+    if isinstance(control, list) and at < len(control) and not one_default_control(block):
         control.pop(at)
     _renumber(holder_node)
     return f"страница {name!r} убрана, страниц {len(pages)}" + (f"; {checked}" if checked else "")

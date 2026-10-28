@@ -10,6 +10,7 @@ from .names import (
     BINDINGS,
     DEFAULT_CONTROL,
     NO_REFERENCE,
+    SEPARATE_BY_PAGE,
     COLUMN_HEAD_NODES,
     COLUMN_VALUE_TYPE,
     COLUMN_WIDTH,
@@ -31,7 +32,7 @@ from .names import (
     _at,
     _maybe,
 )
-from .base import EditError, container, elements_of, layout_block
+from .base import EditError, container, control_slot, elements_of, layout_block, one_default_control, pages_of
 from .platform import (
     ROUND11_ACCEPTED,
     ROUND11_NOTE,
@@ -741,8 +742,8 @@ def _has_nested(node):
         return False
 
 
-def set_property(doc, element=None, name=None, value=NO_VALUE, column=None, nested=False,
-                 page=None, button=None, form=False, unverified=False, move_with_edge=False):
+def _set_property(doc, element=None, name=None, value=NO_VALUE, column=None, nested=False,
+                  page=None, button=None, form=False, unverified=False, move_with_edge=False):
     """Поле карты по имени — у элемента, у колонки (`column`), у её вложенного элемента (`column` +
     `nested=True`), у страницы панели (`page`), у кнопки командной панели (`button`; `element` тогда
     — имя панели или кнопки-меню) или у самой формы (`form=True`, без `element`).
@@ -1336,6 +1337,55 @@ def border_word(value, name="border"):
     pairs = ", ".join(f"«{ru}» = {en}" for en, ru in _chartrows.BORDER_ENGLISH.items())
     raise EditError(f"{name}: рамка словом — слово палитры или имя перечисления ({pairs}); пришло {value!r}. "
                     "Блок рамки целиком (объект с border_type и explicit) тоже принимается")
+
+
+def set_property(doc, element=None, name=None, value=NO_VALUE, column=None, nested=False,
+                 page=None, button=None, form=False, unverified=False, move_with_edge=False):
+    reshape = _separate_by_page_change(doc, element, name, value, column, nested, page, button, form, unverified)
+    said = _set_property(doc, element, name, value, column, nested, page, button, form, unverified, move_with_edge)
+    return said + reshape() if reshape else said
+
+
+set_property.__doc__ = _set_property.__doc__ + """
+    **«Распределять по страницам» у родителя с несколькими страницами** (`separate_by_page`) меняет и «АктивизироватьПоУмолчанию»:
+    с флагом платформа пишет по числу на страницу, без него — одно число на весь родитель. Что она оставляет при переключении, не
+    проверялось: отказ, который снимает `unverified` (тогда без флага остаётся первое число, с флагом остальные страницы получают «не задан»).
+    """
+
+
+def _separate_by_page_change(doc, element, name, value, column, nested, page, button, form, unverified):
+    """Переключение «Распределять по страницам» у родителя с несколькими страницами: отказ без `unverified`, с ним — функция, которая после
+    записи флага приводит список «АктивизироватьПоУмолчанию» к форме, которой требует новый флаг, и отдаёт строку для отчёта. Прочие
+    правки — `None`."""
+    if not (isinstance(name, str) and name.split("/")[-1] == SEPARATE_BY_PAGE) or not isinstance(value, bool) \
+            or column is not None or nested or page is not None or button is not None:
+        return None
+    from .base import find_element
+    try:
+        holder = container(doc) if form else find_element(doc, element).element if element is not None else None
+        block = layout_block(holder, need=False) if holder is not None else None
+    except EditError:
+        return None
+    if not isinstance(block, dict) or block.get(SEPARATE_BY_PAGE) is value or not isinstance(block.get(DEFAULT_CONTROL), list):
+        return None
+    pages = len(pages_of(holder))
+    if pages < 2:
+        return None
+    whose = "формы" if form else f"у {element!r}"
+    if not unverified:
+        raise EditError(f"«Распределять по страницам» {whose} с {pages} страницами меняет и «АктивизироватьПоУмолчанию»: с флагом платформа "
+                        "пишет по числу на страницу, без него — одно число на весь родитель; что она оставляет при переключении, не "
+                        "проверялось. Поставьте флаг в конфигураторе или повторите с \"unverified\": true")
+
+    def reshape():
+        control = block[DEFAULT_CONTROL]
+        block[DEFAULT_CONTROL] = control[:1] if not value else (control[:1] + [NO_REFERENCE] * pages)[:pages]
+        return ("; «АктивизироватьПоУмолчанию» " + ("одно на родитель (оставлено первое число)" if not value
+                                                   else f"по числу на страницу (страницы 2–{pages} — «не задан»)")
+                + ", что пишет платформа, не проверялось")
+    return reshape
+
+
 NO_AUTO_MENU = _ctxmenu.NO_AUTO_MENU
 # Типы, у которых в палитре нет строки «АктивизироватьПоУмолчанию» (по снимкам палитр девяти типов шаблонов).
 NO_DEFAULT_CONTROL = ("Splitter", "ProgressBar", "RadioButton", "PictureBox")
@@ -1362,6 +1412,12 @@ def _set_default_control(doc, element, value):
     block = layout_block(place.holder)
     control = block.get(DEFAULT_CONTROL)
     page = place.element["coords"].get("page", 0)
+    pages = len(pages_of(place.holder))
+    if one_default_control(block) and pages > 1:
+        raise EditError(f"у родителя элемента {element!r} снято «Распределять по страницам», и «АктивизироватьПоУмолчанию» у него одно на "
+                        f"все {pages} страницы; что платформа пишет при выборе элемента на таком родителе, не проверялось — поставьте "
+                        "флаг в конфигураторе")
+    page = control_slot(block, page) if isinstance(page, int) else page
     if not isinstance(control, list) or not isinstance(page, int) or not 0 <= page < len(control):
         raise EditError(f"у родителя элемента {element!r} список «АктивизироватьПоУмолчанию» не разобран "
                         "или короче числа страниц: правка не сделана")

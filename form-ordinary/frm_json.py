@@ -102,17 +102,46 @@ def _write(path, text):
         print(text)
 
 
-def _say(problems, was=None):
+# Сколько предупреждений о длине блока печатается поштучно; больше — одной строкой сводки (полный перечень — `--all-warnings`).
+LENS_LISTED = 3
+
+
+def _say(problems, was=None, all_warnings=False):
     """Замечания выводятся на экран одним форматом строки для команд, которые их печатают (`encode`, `validate`, `edit`).
 
-    `was` — замечания исходной формы (`edit`): предупреждение, которое есть и у неё, помечено «было и в исходной форме» и идёт после новых."""
+    `was` — замечания исходной формы (`edit`): предупреждение, которое есть и у неё, помечено «было и в исходной форме» и идёт после новых.
+
+    Предупреждения о длине блока вне виденных корпусом (`validate.LENS`) у формы старой конфигурации идут сотнями, а форма при этом собирается
+    байт в байт. Больше `LENS_LISTED` таких предупреждений печатаются одной строкой: число позиций по видам элементов. У `edit` поштучно
+    печатаются новые, сводкой — те, что были и в исходной форме. `all_warnings` печатает все поштучно."""
     old = {(p.level, p.where, p.text) for p in was or () if not p.fatal}
     fresh = [p for p in problems if p.fatal or (p.level, p.where, p.text) not in old]
     stale = [p for p in problems if not p.fatal and (p.level, p.where, p.text) in old]
+    lens_fresh = [p for p in fresh if p.kind == validate_mod.LENS]
+    lens_stale = [p for p in stale if p.kind == validate_mod.LENS]
+    fold_fresh = not all_warnings and was is None and len(lens_fresh) > LENS_LISTED
+    fold_stale = not all_warnings and len(lens_stale) > LENS_LISTED
     for p in fresh:
-        print(f"{'ОТКАЗ' if p.fatal else 'Предупреждение'} (уровень {p.level}): {p.text}")
+        if not (fold_fresh and p.kind == validate_mod.LENS):
+            print(f"{'ОТКАЗ' if p.fatal else 'Предупреждение'} (уровень {p.level}): {p.text}")
+    if fold_fresh:
+        print(f"Предупреждение (уровень 2): {_lens_summary(lens_fresh)}")
     for p in stale:
-        print(f"Предупреждение (уровень {p.level}, было и в исходной форме): {p.text}")
+        if not (fold_stale and p.kind == validate_mod.LENS):
+            print(f"Предупреждение (уровень {p.level}, было и в исходной форме): {p.text}")
+    if fold_stale:
+        print(f"Предупреждение (уровень 2, было и в исходной форме): {_lens_summary(lens_stale)}")
+
+
+def _lens_summary(found):
+    """Одна строка вместо перечня предупреждений о длине блока: сколько позиций и у каких видов элементов."""
+    kinds = collections.Counter(p.where.split(" ")[0] for p in found)
+    platform = sum(1 for p in found if "платформа записывает сама" in p.text)
+    shown = ", ".join(f"{kind} {n}" for kind, n in kinds.most_common())
+    return (f"длина блока вне виденных корпусом — {schema.plural(len(found), 'позиция', 'позиции', 'позиций')} ({shown})"
+            + (f", из них {platform} — длины, которые платформа записывает сама" if platform else "")
+            + ". Длин блоков карта не знает: у формы, сохранённой конфигуратором, это не поломка; у правленой руками — сверяйте с исходным "
+              "файлом (короткий блок по праву от блока с убранным последним полем u… не отличить). Перечень — ключ --all-warnings")
 
 
 def cmd_decode(args):
@@ -139,7 +168,7 @@ def cmd_encode(args):
         _finish([args.out], was)
         return 0
     problems = validate_mod.validate(doc)
-    _say(problems)
+    _say(problems, all_warnings=getattr(args, "all_warnings", False))
     if validate_mod.fatal(problems):
         return 1
     node = typed.encode(doc)
@@ -161,7 +190,7 @@ def cmd_validate(args):
         raise ValueError("это уровень 0 (сырое дерево): трёх уровней проверки к нему нет, "
                          "проверку обратным разбором выполняет команда encode")
     problems = validate_mod.validate(doc, config=_config_of(args))
-    _say(problems)
+    _say(problems, all_warnings=getattr(args, "all_warnings", False))
     if not problems:
         print("Проверка пройдена: три уровня без замечаний")
     if not validate_mod.fatal(problems):
@@ -249,7 +278,7 @@ def cmd_edit(args):
     for line in log:
         print(line)
     problems = validate_mod.validate(doc, config=config)
-    _say(problems, validate_mod.validate(original, config=config))
+    _say(problems, validate_mod.validate(original, config=config), all_warnings=getattr(args, "all_warnings", False))
     if validate_mod.fatal(problems):
         return 1
     _say_layout(doc, before)
@@ -1254,10 +1283,22 @@ def cmd_unpack(args):
 
 
 def cmd_pack(args):
-    lines, code = formsource.pack_command(args.path, args.all, args.force)
+    if args.create and args.all:
+        raise ValueError("--create делает контейнер одной форме и с --all не сочетается: назовите форму")
+    lines, code = (formsource.create_command(args.path, args.force) if args.create
+                   else formsource.pack_command(args.path, args.all, args.force))
     for line in lines:
         print(line)
     return code
+
+
+def cmd_selftest(args):
+    """Самопроверка навыка на этой машине (`frm_codec.selftest`): заготовки, правка, рендер, контейнер, файлы; код 1, если отказала хоть одна."""
+    from frm_codec import selftest
+    lines, failed = selftest.run()
+    for line in lines:
+        print(line)
+    return 1 if failed else 0
 
 
 def cmd_epf_copyinfo(args):
@@ -1315,12 +1356,14 @@ def main(argv=None):
                     "Читайте и пишите этот JSON функциями `frm_codec.json0.loads` и `dumps`.\n"
                     "Правка в текстовом редакторе безопасна: она знаков не трогает.")
     p.add_argument("json"); p.add_argument("-o", "--out", required=True)
+    p.add_argument("--all-warnings", action="store_true", help="предупреждения о длине блока поштучно (без ключа больше трёх — одной строкой сводки)")
     p = sub.add_parser("validate", help="три уровня проверки: документ JSON либо форма (form.frm, Form.bin, каталог формы)")
     p.add_argument("json", help="документ уровня 1 (.json), form.frm, Form.bin или каталог формы")
     p.add_argument("--config", help="каталог выгрузки конфигурации (Catalogs/, Documents/, DataProcessors/ в XML): ещё сверка типа таблиц на "
                                     "табличных частях с TypeId части")
     p.add_argument("--root-xml", metavar="ФАЙЛ", help="корневой XML выгрузки внешней обработки или внешнего отчёта (<Имя>.xml): то же для "
                                                       "табличных частей внешнего объекта")
+    p.add_argument("--all-warnings", action="store_true", help="предупреждения о длине блока поштучно (без ключа больше трёх — одной строкой сводки)")
     p = sub.add_parser(
         "edit", help="правка формы перечнем операций (frm_codec.edit)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -1357,6 +1400,7 @@ def main(argv=None):
                    help="куда записать форму. Чтобы собрать Form.bin, назовите form.frm рядом с ним (…/Ext/form.frm); "
                         "иной путь Form.bin не меняет; сам Form.bin и каталог отвергаются")
     p.add_argument("--bsl", help="модуль формы (байты: BOM и перевод строк сохраняются)")
+    p.add_argument("--all-warnings", action="store_true", help="предупреждения о длине блока поштучно (без ключа больше трёх — одной строкой сводки)")
     p.add_argument("--bsl-out", help="куда положить правленый модуль (form.bsl рядом с Form.bin; сам Form.bin отвергается)")
     p.add_argument("--siblings", help="каталог выгрузки той же конфигурации или обработки: вид "
                                       "конфигурации для add_element и set_view")
@@ -1639,6 +1683,11 @@ def main(argv=None):
     p.add_argument("path", help="form.frm, Form.bin, каталог Ext, каталог формы; с --all — каталог с формами")
     p.add_argument("--all", action="store_true", help="собрать все Form.bin под каталогом, где содержимое разошлось")
     p.add_argument("--force", action="store_true", help="собрать и в каталоге с внешней сборкой")
+    p.add_argument("--create", action="store_true", help="новый Form.bin у формы без контейнера: form.frm, form.bsl (нет — пустой модуль), "
+                                                         "info.txt, если есть")
+    sub.add_parser("selftest", help="самопроверка навыка на этой машине: формы, которые навык собирает сам (тесты в комплект не входят)",
+                   description="Строит заготовки всех видов, правит и рисует их, собирает Form.bin и проходит круг «файл → JSON → файл» во "
+                               "временном каталоге с кириллицей в пути. Код 0 — все проверки прошли, 1 — отказ хоть одной (причина в строке).")
     p = sub.add_parser(
         "epf-copyinfo", help=".epf/.erf → дописать в copyinfo ссылки обычных форм (обработка, собранная ibcmd)",
         description="Дописывает в элемент copyinfo внешней обработки или отчёта ссылки, которые нужны её обычным формам; уже записанное "
@@ -1652,7 +1701,7 @@ def main(argv=None):
     args = ap.parse_args(argv)
     handler = {"decode": cmd_decode, "encode": cmd_encode, "validate": cmd_validate,
                "edit": cmd_edit, "generate": cmd_generate, "new": cmd_new, "add-field": cmd_add_field, "fragment": cmd_fragment, "describe": cmd_describe, "brief": cmd_brief, "design": cmd_design, "lint": cmd_lint, "layout": cmd_layout, "render": cmd_render, "anchors-check": cmd_anchors_check, "repair-anchors": cmd_repair_anchors,
-               "diff": cmd_diff, "stat": cmd_stat, "unpack": cmd_unpack, "pack": cmd_pack, "epf-copyinfo": cmd_epf_copyinfo,
+               "diff": cmd_diff, "stat": cmd_stat, "unpack": cmd_unpack, "pack": cmd_pack, "selftest": cmd_selftest, "epf-copyinfo": cmd_epf_copyinfo,
                "schema": cmd_schema, "propose": cmd_propose, "patterns": cmd_patterns}[args.cmd]
     _search_config_pictures(args)
     try:

@@ -16,7 +16,7 @@ from .names import PATTERN_KIND, PROCEDURE_KIND, STANDARD_MARK
 CORPUS_FONT_PLACES = {
     ("TableBoxColumn", "text_font"): 35935, ("TableBoxColumn", "header_font"): 35935,
     ("TableBoxColumn", "footer_font"): 35935, ("Label", "font"): 33374,
-    ("TextBox", "font"): 19329, ("Button", "font"): 12873, ("Panel", "font"): 9130,
+    ("TextBox", "font"): 19329, ("Button", "font"): 12873, ("Panel", "font"): 9143,
     ("CommandBar", "font"): 9009, ("TableBox", "font"): 4358,
     ("TableBox", "header_font"): 4358, ("TableBox", "footer_font"): 4358,
     ("CheckBox", "font"): 3564, ("PictureBox", "font"): 3269, ("GroupBox", "font"): 2631,
@@ -32,9 +32,9 @@ CORPUS_FONT_PLACES = {
 # Версия входит в ключ, потому что у версии 6 нет позиции масштаба. Без версии `scale_set: true` на такой записи
 # прошло бы без отказа.
 CORPUS_FONT_RECORDS = {
-    (7, "Auto", 0): 137066, (6, "Auto", 0): 58975, (7, "StyleFont", 0): 8350,
+    (7, "Auto", 0): 137078, (6, "Auto", 0): 58975, (7, "StyleFont", 0): 8350,
     (6, "StyleFont", 0): 5580, (7, "Auto", 4): 2114, (6, "Auto", 4): 1027,
-    (7, "SystemFont", 62): 728, (7, "StyleFont", 2): 689, (7, "SystemFont", 2): 619,
+    (7, "SystemFont", 62): 728, (7, "StyleFont", 2): 690, (7, "SystemFont", 2): 619,
     (7, "StyleFont", 62): 540, (7, "SystemFont", 63): 462, (7, "StyleFont", 60): 356,
     (7, "SystemFont", 60): 353, (7, "Auto", 2): 173, (7, "StyleFont", 63): 150,
     (6, "SystemFont", 2): 143, (6, "SystemFont", 60): 109, (6, "SystemFont", 62): 105,
@@ -68,12 +68,12 @@ ROUND7_FONT_PLACE = ("Label", "font")
 # `ON_CORPUS["set_font/value"]`.
 CORPUS_FONT_FACES = {"Arial": 615, "Verdana": 87, "MS Shell Dlg": 53, "Tahoma": 4,
                      "Courier New": 2, "Times New Roman": 2, "Courier": 1}
-CORPUS_FONT_SIZES = {100: 1391, 80: 897, 90: 579, 70: 364, 140: 162, 110: 118, 120: 106,
+CORPUS_FONT_SIZES = {100: 1391, 80: 898, 90: 579, 70: 364, 140: 162, 110: 118, 120: 106,
                      240: 91, 65: 45, 160: 38, 180: 25, 420: 25, 200: 16, 520: 15, 480: 13,
                      320: 12, 360: 6, 1520: 5, 400: 3, 340: 2, 220: 1, 720: 1}
 # У всех записей версии 7, кроме абсолютных, масштаб одинаковый («100 %»). Другие значения не встречались.
 # Абсолютный шрифт хранит масштаб в отдельной позиции, а не битом маски, и операция такие шрифты не пишет.
-CORPUS_FONT_SCALE = (100, 151925)
+CORPUS_FONT_SCALE = (100, 151938)
 
 # Кнопка-меню в корпусе: набор кнопок меню и его форма во всех формах одинаковы.
 CORPUS_MENUS = (73, 44, 137)

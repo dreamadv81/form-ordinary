@@ -224,6 +224,8 @@ VALUE_LIST_BASE = _at("TableBoxColumn.ValueList", 1, "Element.TableBoxColumn.u1.
 PAGE_CAPTION = _at("Element.PanelPage", 1, "LocalizedString")
 GUIDES = _run("LayoutList", schema.Counted, "Guide")
 DEFAULT_CONTROL = _run("LayoutList", schema.Along)
+# Флаг «Распределять по страницам»: без него «АктивизироватьПоУмолчанию» — одно число на весь родитель (`Along.one_unless`).
+SEPARATE_BY_PAGE = next(segment.one_unless for segment in schema.MAP["LayoutList"].runs.segments if isinstance(segment, schema.Along))
 SHOW_TABS = next(slot.name for segment in schema.MAP["LayoutList"].runs.segments
                  if isinstance(segment, schema.Fixed) and segment.length == 7
                  for i, slot in segment.fields.items() if i == 1)

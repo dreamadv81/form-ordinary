@@ -73,6 +73,7 @@ from .base import (
     find_element,
     holder_by_name,
     holders,
+    no_pages_words,
     pages_count,
     set_caption,
     set_text,
@@ -562,7 +563,7 @@ def add_element(doc, template=None, name=None, box=None, holder=None, page=0, ca
     items = elements_of(holder_node)
     pages = pages_count(holder_node)
     if pages is None and page:
-        raise EditError(f"у родителя {holder!r} страниц не бывает вовсе — "
+        raise EditError(f"у родителя {holder!r} {no_pages_words(holder_node)} — "
                         "класть элемент можно только на страницу 0")
     if pages is not None and not 0 <= page < pages:
         # Страница без родителя — страница САМОЙ формы, с родителем — страница панели: номер один и тот же,
@@ -1481,7 +1482,7 @@ def move_element(doc, name, box=None, anchor=None, holder=None, page=None, unver
                         "привязка ролью, а не keep (holder — имя панели, а чтобы положить на форму, \"holder\": \"\")")
     pages = pages_count(target)
     if pages is None and page:
-        raise EditError(f"у родителя {holder!r} страниц не бывает вовсе — класть элемент можно только на страницу 0")
+        raise EditError(f"у родителя {holder!r} {no_pages_words(target)} — класть элемент можно только на страницу 0")
     if pages is not None and not 0 <= page < pages:
         raise EditError(f"страницы {page} {'у формы' if holder is None else f'у родителя {holder!r}'} нет: страниц {pages} (счёт с нуля)")
     auto_keep = False
