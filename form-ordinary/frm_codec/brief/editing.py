@@ -58,6 +58,7 @@ OPS = {
     "add_attribute": Op((FORM,), "новый реквизит формы с описателем типа", D_MODULE),
     "remove_attribute": Op((FORM,), "снятие реквизита формы; отказ, пока на него ссылаются элемент, связь по типу или «Сохраняемые значения», и для основного реквизита", D_MODULE),
     "add_form_page": Op((FORM,), "новая страница самой формы (не панели)", D_PAGES),
+    "move_form_page": Op((FORM,), "страница самой формы на другое место: before / after / index", D_PAGES),
     "remove_form_page": Op((FORM,), "удаление страницы самой формы", D_PAGES),
     "set_view": Op((FORM,), "вся форма в одном виде оформления: «как в 8.2» или «как в 8.3»", D_DESIGN),
     "relayout": Op((FORM,), "форма под новый размер клиентской области: координаты и привязки пересчитываются, как их покажет предприятие", D_LAYOUT),
@@ -102,7 +103,8 @@ OPS = {
     "set_column_type": Op(("TableBox",), "тип колонки таблицы или дерева значений (строка, число, дата, булево) и описатель её поля ввода", D_COLUMNS),
     "remove_column": Op(("TableBox",), "колонка из табличного поля", D_COLUMNS),
     "set_column_control": Op(("TableBox",), "вид вложенного элемента колонки (поле ввода, флажок, поле выбора)", D_COLUMNS),
-    "add_page": Op(("Panel",), "страница панели", D_RULES),
+    "add_page": Op(("Panel",), "страница панели (место — before / after / index, без них последней)", D_RULES),
+    "move_page": Op(("Panel",), "страница панели на другое место: before / after / index (порядок страниц в файле — порядок закладок)", D_PAGES),
     "remove_page": Op(("Panel",), "удаление страницы панели", D_RULES),
     "copy_layer": Op(("GeographicalSchemaField",), "слой поля географической схемы из формы-образца", D_SETPROP),
 }
@@ -246,7 +248,7 @@ def _constraints(ctx):
                           "у этого поколения они отказывают без `unverified`.")
         points.append("`set_view` у формы не версии 16 отказывает: вид поля ввода там задаёт поколение, выход — пересохранение формы в конфигураторе.")
         add("version", f"Версия записи формы — {version}", points,
-            ["add_element", "change_type", "set_property", "add_form_page", "remove_form_page", "remove_page", "set_view"])
+            ["add_element", "change_type", "set_property", "add_form_page", "move_form_page", "remove_form_page", "move_page", "remove_page", "set_view"])
     else:
         clear.append("версия записи 16 (шаблоны всех видов, страницы и вид оформления проверены у неё)")
 
@@ -265,7 +267,7 @@ def _constraints(ctx):
         ops = []
         if any(b.startswith("DPI формы") for b in bounds):
             points.append("Операции со страницами формы проверялись при DPI 96 и без `unverified` отказывают.")
-            ops += ["add_form_page", "remove_form_page"]
+            ops += ["add_form_page", "remove_form_page"]      # перестановка страниц (`move_form_page`) от DPI и Рамки не зависит
         if anchors_fix.high_dpi(ctx.form):
             points.append("Правило привязки «на саму себя» на такой форме ломает растяжение по высоте; `normalize_anchors` и `repair_anchors` исправляют именно такие записи.")
             ops += ["normalize_anchors", "repair_anchors"]
@@ -630,7 +632,7 @@ def _notes(ctx, op):
         out += _bar_notes(ctx, op)
     elif op in ("add_column", "remove_column", "set_column_control"):
         out += _table_notes(ctx, op)
-    elif op in ("add_page", "remove_page"):
+    elif op in ("add_page", "move_page", "remove_page"):
         pages = _page_words(ctx)
         out.append("панели формы: " + "; ".join(pages) if pages else "у панелей формы страниц нет")
         if op == "remove_page":
@@ -649,11 +651,19 @@ def _notes(ctx, op):
             out.append(f"форма версии {ctx.version}: операция отказывает")
         else:
             out.append("виды полей ввода сейчас: " + (design.views_words(design.form_views(ctx.doc, ctx.version)) or "полей ввода нет"))
-    elif op in ("add_form_page", "remove_form_page"):
+    elif op in ("add_form_page", "move_form_page", "remove_form_page"):
         own = _form_page_words(ctx)
         out.append("страницы формы: " + "; ".join(own) if own else "у формы одна страница (закладок нет)")
-        bounds = ed_pages.form_page_bounds(ctx.doc)
-        out.append("без `unverified` откажет: " + "; ".join(_short(b, 110) for b in bounds) if bounds else "проверенный случай: поколение 16, DPI 96, без Рамки")
+        if op == "move_form_page":      # перестановка от DPI и Рамки не зависит: её граница — закладки и поколение формы
+            try:
+                bounds = ed_pages._form_move_wider(ctx.doc, ed_pages._form_pages_block(ctx.doc).get("show_tabs"), ctx.version)
+            except EditError as why:
+                bounds = [str(why)]
+            out.append("без `unverified` откажет: " + "; ".join(_short(b, 110) for b in bounds) if bounds
+                       else "проверенный случай: поколение 16, закладки «Не отображать» или «Сверху»")
+        else:
+            bounds = ed_pages.form_page_bounds(ctx.doc)
+            out.append("без `unverified` откажет: " + "; ".join(_short(b, 110) for b in bounds) if bounds else "проверенный случай: поколение 16, DPI 96, без Рамки")
     elif op == "normalize_page_edges":
         pages = layout.wide_pages(ctx.form) + layout.narrow_pages(ctx.form)
         out.append(f"страниц панелей не по видимой части: {len({(o.qualified(), pg) for o, pg, *_r in pages})}" if pages else "страниц панелей не по видимой части нет: форма не изменится")

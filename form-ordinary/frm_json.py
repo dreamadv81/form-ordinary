@@ -277,6 +277,8 @@ def cmd_edit(args):
     doc, bsl, log = edit_mod.apply(doc, ops, bsl, siblings, config, final_captions=True)
     for line in log:
         print(line)
+    for line in edit_mod.page_index_lines(ops, bsl if args.bsl else module_before):      # перестановка страниц меняет их номера, а код модуля не правится
+        print(line)
     problems = validate_mod.validate(doc, config=config)
     _say(problems, validate_mod.validate(original, config=config), all_warnings=getattr(args, "all_warnings", False))
     if validate_mod.fatal(problems):

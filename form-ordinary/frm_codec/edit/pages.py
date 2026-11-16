@@ -1,6 +1,7 @@
 """Страницы панели и страницы самой формы. Все имена отдаёт фасад `frm_codec.edit`."""
 
 import copy
+import re
 
 from .. import design as _design, typed, schema
 from . import names as ed_names
@@ -60,7 +61,7 @@ def _box_of(node):
     return coords[WIDTH] - coords[X], coords[HEIGHT] - coords[Y]
 
 
-def add_page(doc, panel, name, caption=None, donor=None, unverified=False):
+def add_page(doc, panel, name, caption=None, donor=None, before=None, after=None, index=None, unverified=False):
     """Страница панели: узел страницы, четыре направляющие, счётчики.
 
     Платформа принимает такую страницу: обе закладки видны, надписи лежат на своих страницах.
@@ -77,11 +78,22 @@ def add_page(doc, panel, name, caption=None, donor=None, unverified=False):
     вертикальные, «Слева/Справа (горизонтально)», «в несколько строк», код 13) выполняются только с
     `unverified=True`: формула от области страницы, корпус её не подтверждает или почти не видел,
     а отчёт называет это словами. Если подпись закладок не измерена, операция отказывает даже с ключом.
+
+    **Место новой страницы** — один из ключей `before` / `after` (соседняя страница: имя или номер с нуля) / `index` (место новой
+    страницы с нуля; число страниц — в конец). Без ключа страница встаёт последней, как у «Добавить страницу» конфигуратора (он
+    кладёт новую страницу в конец и при текущей странице в середине). С ключом она добавляется в конец, а потом переносится тем же
+    телом, что у `move_page` (`_reorder_pages`), и с той же границей проверенного: её направляющие остаются в конце списка, как у
+    страницы, которую в конфигураторе добавили и сдвинули назад.
     """
     place, block = _panel_pages(doc, panel)
     pages = block[PAGES][PAGE_ITEMS]
     if name in [page.get(PAGE_NAME) for page in pages]:
         raise EditError(f"страница {name!r} у {panel!r} уже есть")
+    want = _new_page_place(pages, before, after, index, repr(panel), "add_page")
+    moved = ""
+    if want is not None and want != len(pages):
+        _control_fits(block, len(pages))            # отказы переноса — до добавления страницы: отказ не оставляет полправки
+        moved = _panel_move_gate(doc, block, "add_page", unverified)
     if donor is None:
         source = pages[0]
     else:
@@ -108,7 +120,184 @@ def add_page(doc, panel, name, caption=None, donor=None, unverified=False):
     block[GUIDES] = block[GUIDES] + guides
     if isinstance(block.get(DEFAULT_CONTROL), list) and not one_default_control(block):
         block[DEFAULT_CONTROL] = block[DEFAULT_CONTROL] + [NO_REFERENCE]
-    return f"{panel}: страница {name!r}, страниц {len(pages)}; " + "; ".join(words)
+    said = f"{panel}: страница {name!r}, страниц {len(pages)}; " + "; ".join(words)
+    if want is not None and want != len(pages) - 1:
+        said += "; " + _reorder_pages(place.element, block, len(pages) - 1, want) + (f"; {moved}" if moved else "")
+    return said
+
+
+# ── Перестановка страниц ──────────────────────────────────────────────────────────────────────
+
+#
+# Номер страницы — место её записи в списке страниц родителя. От него в файле зависят четыре места, и перестановка меняет
+# только их (перепись снимка корпуса: 4 993 формы, 1 606 панелей и 8 форм с двумя и более страницами):
+#
+# * **Порядок записей страниц.** Имя, заголовок, картинка закладки, видимость и доступность лежат в самой записи и переезжают
+#   вместе с ней.
+# * **АктивизироватьПоУмолчанию** — по числу на страницу в порядке страниц (31 случай из 31, где у страницы задан элемент: он
+#   лежит на этой же странице); одно число без «Распределять по страницам» не меняется.
+# * **Номер страницы у направляющих.** Место направляющей в списке НЕ меняется: у 528 родителей корпуса из 538, где направляющие
+#   идут не по номеру страницы, четвёрки страниц лежат сплошняком, но вразнобой (`1, 0`; `2, 3, 1, 4, 5, 0, 6`) — так платформа
+#   оставляет их после перестановки страниц. Номер вне страниц (2 147 483 647 — «ни к какой странице») не трогается, как в
+#   `_remove_page_of`.
+# * **Номер страницы у элементов родителя** (прямые дети; страницы вложенной панели — свой список).
+#
+# Не меняются: порядок обхода и номер на странице (считаются в пределах страницы), встречные записи привязок и связи контекстных
+# меню (ссылаются на элементы), список элементов (он идёт в порядке создания: у 947 панелей из 1 549 — не по номеру страницы),
+# координаты и привязки. Текущая страница в файл не пишется: форма открывается на странице 0.
+
+PLACE_KEYS = ("before", "after", "index")
+
+
+def _place_keys(before, after, index, op):
+    """Ключи места, названные в вызове; больше одного — отказ. Ни одного — пустой перечень (решает вызывающая операция)."""
+    named = [key for key, value in zip(PLACE_KEYS, (before, after, index)) if value is not None]
+    if len(named) > 1:
+        raise EditError(f"{op}: место называет ровно один ключ из before / after / index, а названо {', '.join(named)}")
+    return named
+
+
+def _place_among(pages, at, before, after, index, who, op):
+    """Место страницы `at` после переноса (с нуля) по одному из ключей места; `at=None` — страницы ещё нет в списке (`add_page`).
+
+    `index` — место после переноса: от 0 до числа страниц минус один (у новой страницы — до числа страниц: оно и есть «в конец»).
+    `before` / `after` — соседняя страница того же родителя, именем или номером с нуля (правило имени — `_page_by_name`).
+    """
+    count = len(pages)
+    if index is not None:
+        last = count if at is None else count - 1
+        if isinstance(index, bool) or not isinstance(index, int) or not 0 <= index <= last:
+            raise EditError(f"{op}: index={index!r}: место страницы называют числом от 0 до {last} (счёт с нуля; страниц у {who} "
+                            f"{count}{', новая встаёт ещё одной' if at is None else ''})")
+        return index
+    key, ref = ("before", before) if before is not None else ("after", after)
+    other = _page_by_name(pages, ref, who, role="соседней страницы")
+    if other == at:
+        raise EditError(f"{op}: {key}={ref!r}: страница не может стоять рядом сама с собой")
+    rest = [i for i in range(count) if i != at]
+    return rest.index(other) + (1 if key == "after" else 0)
+
+
+def _new_page_place(pages, before, after, index, who, op):
+    """Место новой страницы у `add_page` и `add_form_page`: `None` — ключа места нет (страница встаёт последней)."""
+    if not _place_keys(before, after, index, op):
+        return None
+    return _place_among(pages, None, before, after, index, who, op)
+
+
+def _page_label(page, at):
+    name = page.get(PAGE_NAME) if isinstance(page, dict) else None
+    return f"{name}" if isinstance(name, str) and name else f"страница {at}"
+
+
+def _control_fits(block, count):
+    """`True`, если АктивизироватьПоУмолчанию родителя — по числу на страницу, и чисел столько же, сколько страниц (`count`); одно
+    число на родителя — `False`. Чисел не по числу страниц — отказ: какое какой странице принадлежит, не определить."""
+    control = block.get(DEFAULT_CONTROL)
+    per_page = isinstance(control, list) and not one_default_control(block)
+    if per_page and len(control) != count:
+        raise EditError(f"АктивизироватьПоУмолчанию несёт {len(control)} чисел при {count} страницах — у форм платформы их по числу "
+                        "страниц; какое число какой странице принадлежит, не определить, страницы не переставляются")
+    return per_page
+
+
+def _reorder_pages(holder_node, block, at, want):
+    """Тело перестановки: страница с номером `at` встаёт на место `want`. Одно на панель и на форму (как `_remove_page_of`).
+
+    Меняет четыре места (см. выше) и ничего больше. Возвращает слова отчёта: порядок страниц и сколько чего получило новый номер.
+    """
+    pages = block[PAGES][PAGE_ITEMS]
+    count = len(pages)
+    order = [i for i in range(count) if i != at]
+    order.insert(want, at)                          # новое место -> прежний номер
+    new_of = {old: new for new, old in enumerate(order)}
+    per_page = _control_fits(block, count)
+    pages[:] = [pages[old] for old in order]
+    if per_page:
+        control = block[DEFAULT_CONTROL]
+        control[:] = [control[old] for old in order]
+    guides = 0
+    for guide in block.get(GUIDES) or []:
+        where = guide.get(GUIDE_PAGE) if isinstance(guide, dict) else None
+        # Только номер страницы: 2 147 483 647 («ни к какой странице») и прочее вне страниц остаётся как было.
+        if isinstance(where, int) and not isinstance(where, bool) and 0 <= where < count and new_of[where] != where:
+            guide[GUIDE_PAGE] = new_of[where]
+            guides += 1
+    moved = 0
+    for item in (holder_node.get(ELEMENTS) or {}).get(ITEMS) or []:
+        coords = item.get(COORDS) if isinstance(item, dict) else None
+        where = coords.get(PAGE) if isinstance(coords, dict) else None
+        if isinstance(where, int) and not isinstance(where, bool) and 0 <= where < count and new_of[where] != where:
+            coords[PAGE] = new_of[where]
+            moved += 1
+    listed = ", ".join(_page_label(page, i) for i, page in enumerate(pages))
+    said = (f"страница {_page_label(pages[want], want)!r} перенесена с места {at + 1} на место {want + 1} из {count}; порядок: {listed}; "
+            f"новый номер страницы получили элементы ({moved}) и направляющие ({guides}), место направляющих в списке прежнее"
+            + ("; АктивизироватьПоУмолчанию переставлено вместе со страницами" if per_page else ""))
+    if 0 in (at, want):
+        said += (f"; первой страницей стала {_page_label(pages[0], 0)!r}: текущая страница в файл не пишется, при открытии формы "
+                 "показана первая")
+    return said
+
+
+def _move_page_of(holder_node, block, page, before, after, index, who, op, gate=None):
+    """Перенос страницы панели (`move_page`) или самой формы (`move_form_page`): адрес, место, граница проверенного, тело.
+
+    `gate(номер, место, страниц)` — граница «проверено» у вызывающей операции: вызывается после отказов по строению и до правки;
+    либо отказывает сама, либо отдаёт слова, которые встают в конец отчёта.
+    """
+    pages = block[PAGES][PAGE_ITEMS]
+    at = _page_by_name(pages, page, who)
+    if not _place_keys(before, after, index, op):
+        raise EditError(f"{op}: место называет ровно один ключ из before / after / index, а названо ничего")
+    want = _place_among(pages, at, before, after, index, who, op)
+    if want == at:
+        listed = ", ".join(_page_label(p, i) for i, p in enumerate(pages))
+        return f"страница {_page_label(pages[at], at)!r} уже на месте {at + 1}; порядок: {listed}"
+    checked = gate(at, want, len(pages)) if gate is not None else ""
+    return _reorder_pages(holder_node, block, at, want) + (f"; {checked}" if checked else "")
+
+
+# Перестановка страницы панели сверена с конфигуратором 8.3 на форме поколения 16: его «Сдвинуть вперед» и «Сдвинуть назад»
+# (контекстное меню панели, действуют на текущую страницу, шаг — одно место) пишут ровно то, что `_reorder_pages`; форма после
+# операции и форма конфигуратора различаются одним счётчиком сохранений. Сверено при положениях закладок из `MOVE_PAGE_TABS`, в том
+# числе перенос страницы с первого места и на него: направляющие страницы, ушедшей с первого места и вставшей на него, конфигуратор
+# не пересчитывает. При других положениях закладок перестановка не сверялась — отказ, снимаемый `unverified`.
+MOVE_PAGE_TABS = ("Top", "TopScrolling", "Bottom", "LeftVertical", "DontUse")
+MOVE_PAGE_CHECKED = (
+    "сверено с конфигуратором («Сдвинуть вперед» и «Сдвинуть назад» контекстного меню панели): форма после операции отличается от "
+    "формы конфигуратора только счётчиком сохранений")
+
+
+def _panel_move_gate(doc, block, op, unverified):
+    """Граница «проверено» у перестановки страницы панели: слова отчёта либо отказ, снимаемый `unverified`."""
+    tabs = block.get(SHOW_TABS)
+    wider = []
+    if tabs not in MOVE_PAGE_TABS:
+        wider.append(f"закладки панели {tabs!r}, а перестановка страниц сверялась с конфигуратором при закладках "
+                     f"{', '.join(repr(t) for t in MOVE_PAGE_TABS)}")
+    version = _design.form_version(doc)
+    if version != FORM_PAGE_VERSION:
+        wider.append(f"форма поколения {version}, а перестановка страниц сверялась на форме поколения {FORM_PAGE_VERSION}")
+    return _page_gate(op, wider, unverified, MOVE_PAGE_CHECKED)
+
+
+def move_page(doc, panel, page, before=None, after=None, index=None, unverified=False):
+    """Страница панели на другое место среди страниц той же панели: порядок страниц в файле — порядок закладок.
+
+    `page` — имя страницы или её номер с нуля. Место называет один ключ: `before` / `after` — соседняя страница (имя или номер),
+    `index` — место страницы после переноса (с нуля). Меняются порядок записей страниц, АктивизироватьПоУмолчанию (по числу на
+    страницу), номер страницы у направляющих и у элементов панели; координаты, привязки, порядок обхода, номера на странице и
+    список элементов остаются прежними (`_reorder_pages`). Код модуля, который обращается к странице по номеру
+    (`Страницы[0]`), операция не правит: `frm_json.py edit` называет такие строки.
+
+    Граница проверенного — положения закладок `MOVE_PAGE_TABS` и поколение формы 16; вне её отказ, снимаемый `unverified`.
+    """
+    place, block = _panel_pages(doc, panel)
+
+    def gate(at, want, count):
+        return _panel_move_gate(doc, block, "move_page", unverified)
+    return f"{panel}: {_move_page_of(place.element, block, page, before, after, index, repr(panel), 'move_page', gate)}"
 
 
 # ── Страницы самой формы ──────────────────────────────────────────────────────────────────────
@@ -267,10 +456,12 @@ def _page_by_name(pages, name, who, role="страницы"):
 # числом страниц, а отчёт называет, что не проверялось. Исключение: сдвиг первой страницы при чужом
 # крае или отступе не выполняется.
 #
-# Вставки не в конец нет: платформа кладёт новую страницу после текущей страницы конструктора, а
-# операция всегда добавляет страницу последней. Дополнительно проверены «Сверху» при двух и трёх
-# страницах и «Не отображать» при трёх и четырёх страницах: платформа принимает такие формы как
-# собранные.
+# Новая страница встаёт последней и у операции, и у конфигуратора: «Добавить страницу» при текущей странице в
+# середине кладёт новую в конец (сверено у формы «Сверху» с четырьмя страницами и у панели с пятью), а её
+# направляющие — в конец списка. На другое место страницу ставят ключи `before` / `after` / `index` — тем же
+# телом, что `move_form_page`: это «Добавить страницу» и «Сдвинуть назад» конфигуратора одной операцией.
+# Дополнительно проверены «Сверху» при двух и трёх страницах и «Не отображать» при трёх и четырёх страницах:
+# платформа принимает такие формы как собранные.
 FORM_PAGE_MEASURED = {("DontUse", 1), ("Top", 1), ("DontUse", 2), ("Top", 2), ("DontUse", 3),
                       ("Top", 3), ("DontUse", 4)}
 FORM_PAGE_VERSION = 16
@@ -2258,6 +2449,145 @@ def top_size_plan_nobar(doc, axis, old, new):
     return writes, TOP_SIZE_NOBAR_MEASURED
 
 
+# ── Код модуля, который называет страницу номером ──
+
+#
+# Перестановка меняет номера страниц, а модуль формы операции не правят. Обращение по имени (`Страницы.Изделия`) от перестановки
+# не ломается; по номеру (`Страницы[0]`, `Страницы.Получить(0)`) — начинает называть другую страницу, а `Страницы.Сдвинуть(...)`
+# двигает уже переставленное. Ищутся прямые обращения через имя панели (у формы — через её свойство `Панель`); обращение через
+# переменную, в которую панель положили раньше, так не найти — это сказано в справке.
+_PAGE_INDEX_TAIL = r"\s*\.\s*(?:Страницы|Pages)\s*(?:\[\s*(?!\")|\.\s*(?:Сдвинуть|Получить|Индекс|Move|Get|IndexOf)\s*\()"
+PAGE_INDEX_SHOWN = 6    # строк модуля в предупреждении не больше стольких, остальные — числом
+
+
+def _code_line(line):
+    """Строка модуля без комментария и без содержимого строковых литералов: `//` вне литерала обрывает её, а текст в кавычках — не код."""
+    out, quoted = [], False
+    for at, char in enumerate(line):
+        if char == '"':
+            quoted = not quoted
+            out.append(char)
+        elif quoted:
+            continue
+        elif char == "/" and line[at:at + 2] == "//":
+            break
+        else:
+            out.append(char)
+    return "".join(out)
+
+
+def page_index_refs(module, owner=None):
+    """Строки модуля, где к страницам родителя обращаются по номеру или сдвигают их: `[(номер строки с единицы, текст)]`.
+
+    `owner` — имя панели; `None` — страницы самой формы (свойство формы `Панель`, с `ЭтаФорма.` или без, но не `ЭлементыФормы.Панель`).
+    `module` — байты или текст `form.bsl`; пустой и `None` — пусто.
+    """
+    if not module:
+        return []
+    text = module.decode("utf-8-sig", "replace") if isinstance(module, (bytes, bytearray)) else str(module)
+    head = (r"(?<![\w.])(?:(?:ЭтаФорма|ThisForm)\s*\.\s*)?(?:Панель|Panel)" if owner is None
+            else r"(?<!\w)" + re.escape(owner))
+    pattern = re.compile(head + _PAGE_INDEX_TAIL, re.IGNORECASE)
+    return [(number, line.strip()) for number, line in enumerate(text.splitlines(), 1) if pattern.search(_code_line(line))]
+
+
+def page_index_lines(ops, module):
+    """Предупреждения `edit` о коде модуля после перестановки страниц: по строке на родителя, чьи страницы переставил перечень операций.
+
+    Перестановку делают `move_page`, `move_form_page` и `add_page` / `add_form_page` с ключом места. Модуля нет — пусто.
+    """
+    owners = []
+    for op in ops:
+        if not isinstance(op, dict):
+            continue
+        name = op.get("op")
+        placed = any(op.get(key) is not None for key in PLACE_KEYS)
+        if name == "move_page" or (name == "add_page" and placed):
+            owner = op.get("panel")
+        elif name == "move_form_page" or (name == "add_form_page" and placed):
+            owner = None
+        else:
+            continue
+        if owner not in owners and (owner is None or isinstance(owner, str)):
+            owners.append(owner)
+    out = []
+    for owner in owners:
+        found = page_index_refs(module, owner)
+        if not found:
+            continue
+        who = "страницам формы" if owner is None else f"страницам панели «{owner}»"
+        shown = "; ".join(f"строка {number}: `{text}`" for number, text in found[:PAGE_INDEX_SHOWN])
+        more = f"; и ещё {len(found) - PAGE_INDEX_SHOWN}" if len(found) > PAGE_INDEX_SHOWN else ""
+        out.append(f"Предупреждение: модуль формы обращается к {who} по номеру или сдвигает их, а перестановка меняет номера страниц — "
+                   f"{shown}{more}. Модуль операции не правят: проверьте эти строки (обращение по имени, `Страницы.Имя`, от порядка не зависит)")
+    return out
+
+
+# Перестановка страницы самой формы сверена с конфигуратором 8.3 на форме поколения 16 при закладках «Не отображать» и «Сверху»
+# (`MOVE_FORM_PAGE_TABS`): «Сдвинуть вперед» и «Сдвинуть назад» контекстного меню формы пишут то же, что `_reorder_pages`, в том числе
+# когда страница уходит с первого места или встаёт на него, — направляющие и элементы конфигуратор при этом не пересчитывает.
+#
+# **Первая страница формы после переноса — другая страница.** Командные панели формы и прочие элементы прежней первой страницы
+# остаются на своей странице и видны только на ней: при закладках «Не отображать» форма откроется на новой первой странице без них.
+# Отчёт называет это словами (`_first_form_page_words`).
+MOVE_FORM_PAGE_TABS = ("DontUse", "Top")
+MOVE_FORM_PAGE_CHECKED = (
+    "сверено с конфигуратором («Сдвинуть вперед» и «Сдвинуть назад» контекстного меню формы): страницы, направляющие, "
+    "АктивизироватьПоУмолчанию и номера страниц элементов записаны так же")
+
+
+def _form_move_wider(doc, tabs, version):
+    """Чем перестановка страницы формы шире проверенного: слова; пусто — ничем."""
+    wider = []
+    if tabs not in MOVE_FORM_PAGE_TABS:
+        wider.append(f"закладки формы {tabs!r}, а перестановка страниц формы сверялась с конфигуратором при закладках "
+                     f"{', '.join(repr(t) for t in MOVE_FORM_PAGE_TABS)}")
+    if version != FORM_PAGE_VERSION:
+        wider.append(f"форма поколения {version}, а перестановка страниц формы сверялась на форме поколения {FORM_PAGE_VERSION}")
+    return wider
+
+
+def _first_form_page_words(doc, block, was_first):
+    """Слова отчёта, когда первой страницей формы стала другая: где теперь командные панели формы, лежавшие на прежней первой.
+
+    `was_first` — запись страницы, стоявшей первой до переноса. Панелей на ней нет — пусто.
+    """
+    pages = block[PAGES][PAGE_ITEMS]
+    now = next((i for i, page in enumerate(pages) if page is was_first), None)
+    if not now:
+        return ""
+    bars = [(item.get(NAME_BLOCK) or {}).get(NAME) for item in _form_top_elements(doc)
+            if item.get("type") == "CommandBar" and isinstance(item.get(COORDS), dict) and item[COORDS].get(PAGE) == now]
+    if not bars:
+        return ""
+    return (f"командные панели формы ({', '.join(map(str, bars))}) лежат на странице {_page_label(pages[now], now)!r} — теперь она "
+            f"{now + 1}-я: панели видны только на ней, а форма открывается на первой странице")
+
+
+def move_form_page(doc, page, before=None, after=None, index=None, unverified=False):
+    """Страница самой формы на другое место: как `move_page` у панели и тем же телом (`_reorder_pages`).
+
+    `page` — имя страницы или её номер с нуля; место — один ключ из `before` / `after` (соседняя страница) / `index` (место после
+    переноса, с нуля). Меняются порядок записей страниц, АктивизироватьПоУмолчанию, номер страницы у направляющих формы и у
+    элементов верхнего уровня; всё остальное остаётся прежним. Когда первой становится другая страница, отчёт называет, где
+    остались командные панели формы.
+
+    Граница проверенного — закладки `MOVE_FORM_PAGE_TABS` и поколение 16; вне её отказ, снимаемый `unverified`. Для поколения 10
+    отказ тот же, что у `add_form_page`, и `unverified` его не снимает.
+    """
+    version = _old_form_pages(doc, "переставляйте")
+    block = _form_pages_block(doc)
+    tabs = block.get(SHOW_TABS)
+    pages = block[PAGES][PAGE_ITEMS]
+    was_first = pages[0] if pages else None
+
+    def gate(at, want, count):
+        return _page_gate("move_form_page", _form_move_wider(doc, tabs, version), unverified, MOVE_FORM_PAGE_CHECKED)
+    said = _move_page_of(container(doc), block, page, before, after, index, "формы", "move_form_page", gate)
+    bars = _first_form_page_words(doc, block, was_first)
+    return f"форма: {said}" + (f"; {bars}" if bars else "")
+
+
 def _form_page_bounds(doc, version, framed_ok=False):
     """Чем форма шире проверенного для страниц формы: слова; пустой результат означает «ничем». Названы
     поколение, DPI и Рамка. Закладки и число страниц называет сама операция.
@@ -2315,7 +2645,7 @@ def _first_page_edge(doc, block):
     return guides, rules, wider
 
 
-def add_form_page(doc, name=None, caption=None, donor=None, keep_tabs=False, unverified=False):
+def add_form_page(doc, name=None, caption=None, donor=None, keep_tabs=False, before=None, after=None, index=None, unverified=False):
     """Страница самой формы (не панели): запись, четыре направляющие, счётчики — и то, что при этом делает
     платформа.
 
@@ -2337,6 +2667,11 @@ def add_form_page(doc, name=None, caption=None, donor=None, keep_tabs=False, unv
     Остальные случаи (см. `_form_page_bounds`) — отказ, снимаемый `unverified`. Элементы на новую
     страницу кладёт `add_element` без родителя с параметром `page` — номером страницы формы (счёт с
     нуля).
+
+    **Место новой страницы** — один из ключей `before` / `after` (соседняя страница: имя или номер с
+    нуля) / `index` (место новой страницы с нуля). Без ключа страница встаёт последней. С ключом она
+    добавляется в конец, всё, что операция делает со страницей 0, делается с прежней первой страницей, и
+    лишь потом новая страница переносится на место телом `move_form_page` и с его границей проверенного.
     """
     version = _old_form_pages(doc, "добавляйте")
     if not isinstance(name, str) or not name:
@@ -2347,6 +2682,7 @@ def add_form_page(doc, name=None, caption=None, donor=None, keep_tabs=False, unv
     pages = block[PAGES][PAGE_ITEMS]
     if name in [page.get(PAGE_NAME) for page in pages if isinstance(page, dict)]:
         raise EditError(f"страница {name!r} у формы уже есть")
+    want = _new_page_place(pages, before, after, index, "формы", "add_form_page")
     if donor is None:
         source = pages[0] if pages else None
     else:
@@ -2450,6 +2786,14 @@ def add_form_page(doc, name=None, caption=None, donor=None, keep_tabs=False, unv
         wider += probe_wider
     if shift and _right_move(doc, first_guides) not in (None, width - 2):
         wider.append(RIGHT_MOVE_WORDS.format(m=_right_move(doc, first_guides)))
+    place_checked = None
+    if want is not None and want != count:
+        _control_fits(block, count)                 # отказ переноса — до добавления страницы
+        # Закладки, при которых страница переносится: у формы «Не отображать» с одной страницей операция сама включает «Сверху».
+        place_wider = [w for w in _form_move_wider(doc, "Top" if tabs == "DontUse" and count == 1 and not keep_tabs else tabs, version)
+                       if w not in wider and not w.startswith("форма поколения")]      # поколение уже названо `_form_page_bounds`
+        wider += place_wider
+        place_checked = None if place_wider else MOVE_FORM_PAGE_CHECKED
     if wider and not unverified:
         raise EditError(
             "add_form_page: страница формы проверена у формы поколения 16 без Рамки "
@@ -2535,8 +2879,15 @@ def add_form_page(doc, name=None, caption=None, donor=None, keep_tabs=False, unv
     else:
         said.append(f"не проверялось: {'; '.join(wider)}; сделано то же, что в случае той "
                     "же формы закладок и числа страниц")
-    said.append("страница встала последней — вставку после текущей страницы конструктора "
-                "(так делает платформа) операция не делает")
+    if want is None or want == len(pages) - 1:
+        said.append("страница встала последней, как у «Добавить страницу» конфигуратора; другое место называют ключи "
+                    "before / after / index")
+    else:
+        was_first = pages[0]
+        said.append(_reorder_pages(container(doc), block, len(pages) - 1, want) + (f"; {place_checked}" if place_checked else ""))
+        bars = _first_form_page_words(doc, block, was_first)
+        if bars:
+            said.append(bars)
     return "; ".join(said)
 
 

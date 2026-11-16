@@ -27,7 +27,7 @@ from .reparent_ops import reparent
 from .columns import add_column, remove_column, set_column_control, set_column_type
 from .valuesrc import add_columns
 from .font import set_font
-from .pages import add_form_page, add_page, remove_form_page
+from .pages import add_form_page, add_page, move_form_page, move_page, remove_form_page
 from .module import append_procedure, module_words
 from .period import add_period_choice
 from .collapse import add_collapsible_panel
@@ -91,9 +91,9 @@ FORM_OPS = {fn.__name__: fn for fn in (
     set_button_picture, set_button_shortcut,
     add_button, move_button, remove_button, set_button_action, set_menu_mode,
     add_element, add_pair, remove_element, rename_element, move_element, change_type, reparent, set_action_source, set_anchors, set_font,
-    add_column, add_columns, remove_column, set_column_control, set_column_type, add_page, remove_page,
+    add_column, add_columns, remove_column, set_column_control, set_column_type, add_page, move_page, remove_page,
     add_attribute, remove_attribute, bind, set_event, set_property, set_type_link, set_view, copy_layer,
-    add_form_page, remove_form_page, set_form_event, set_saved_values, set_field_type, set_tab_order)}
+    add_form_page, move_form_page, remove_form_page, set_form_event, set_saved_values, set_field_type, set_tab_order)}
 MODULE_OPS = {append_procedure.__name__: append_procedure}
 # Операции, которые правят и форму, и модуль: функция получает документ и байты модуля, возвращает `(слова, новый модуль)`.
 COMBINED_OPS = {add_period_choice.__name__: add_period_choice, add_collapsible_panel.__name__: add_collapsible_panel}

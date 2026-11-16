@@ -124,7 +124,7 @@ frm_json.py generate описание.json --form form.frm -o out.frm --render c
 | Свойства самой формы и перевёрнутые флаги (`"form": true`), размер формы и направляющие края (`normalize_guides`), обработчики событий формы, шрифт формы, «Сохраняемые значения». | `docs/edit-formprops.md` |
 | Связь по типу (`set_type_link`), кнопки, элементы, колонки и страницы панели; что операции ведут сами; чего редактор не умеет. | `docs/edit-rules.md` |
 | Привязки границ: `set_anchors`, `normalize_anchors`, `repair_anchors`, встречные записи, роли осей; формы, которые не растягиваются в предприятии. | `docs/anchors.md` |
-| Страницы самой формы: `add_form_page`, `remove_form_page`. | `docs/form-pages.md` |
+| Страницы самой формы: `add_form_page`, `remove_form_page`; перестановка страниц панели и формы: `move_page`, `move_form_page`, место новой страницы (`before`/`after`/`index`). | `docs/form-pages.md` |
 | Один дизайн формы: `set_view`, `design`. | `docs/design.md` |
 | Раскладка при размере окна (`layout`, `relayout`), рендер (`render`) и его калибровка по снимкам. | `docs/layout.md` |
 | Форма с нуля: `new`, `generate` без `--form`, `remove_attribute`; сквозной пример — обработка с парами, датой, флажком, переключателями, полем выбора, многострочным полем, таблицей, закладками и нижней панелью; входные форматы, о которые спотыкаются. | `docs/from-scratch.md` |
@@ -182,7 +182,7 @@ frm_json.py edit form.frm --ops ops.json -o out.frm [--bsl form.bsl --bsl-out ou
 |---|---|
 | тексты и кнопки | `set_form_title`, `set_caption`, `set_button_text`, `set_tool_tip`, `set_description`, `add_button`, `move_button`, `remove_button`, `set_button_action`, `set_button_picture`, `set_button_shortcut`, `set_menu_mode` |
 | элементы | `add_element`, `add_pair`, `remove_element`, `rename_element`, `move_element`, `reparent`, `change_type`, `copy_layer`, `set_property`, `set_font`, `set_tab_order` |
-| колонки, страницы | `add_column`, `add_columns`, `set_column_type`, `remove_column`, `set_column_control`, `add_page`, `remove_page`, `add_form_page`, `remove_form_page` |
+| колонки, страницы | `add_column`, `add_columns`, `set_column_type`, `remove_column`, `set_column_control`, `add_page`, `move_page`, `remove_page`, `add_form_page`, `move_form_page`, `remove_form_page` |
 | данные и модуль | `add_attribute`, `remove_attribute`, `bind`, `set_event`, `set_form_event`, `set_saved_values`, `set_type_link`, `set_field_type`, `set_action_source`, `append_procedure`, `add_period_choice`, `add_collapsible_panel` |
 | раскладка | `set_anchors`, `relayout`, `normalize_anchors`, `repair_anchors`, `normalize_page_edges`, `normalize_guides`, `set_view` |
 
